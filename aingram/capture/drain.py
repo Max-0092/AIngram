@@ -33,7 +33,9 @@ class CaptureDrain:
         self._memory_db_path = memory_db_path
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._records_since_consolidation: int = 0
+        # None = not yet initialized; will be seeded from the DB on first batch
+        # so that entries accumulated across daemon restarts count toward the interval.
+        self._records_since_consolidation: int | None = None
 
     def _get_store(self):
         if self._store is None:
@@ -77,6 +79,15 @@ class CaptureDrain:
         if not batch:
             return 0
 
+        # Seed counter from the DB on first batch so entries accumulated across
+        # daemon restarts count toward the consolidation interval.
+        if self._records_since_consolidation is None:
+            self._records_since_consolidation = self._get_store().unconsolidated_count()
+            logger.debug(
+                'Initialized consolidation counter from DB: %d unconsolidated entries',
+                self._records_since_consolidation,
+            )
+
         for row_id, record in batch:
             try:
                 store = self._get_store()
@@ -92,6 +103,7 @@ class CaptureDrain:
 
         if (
             self._config.consolidation_interval_records > 0
+            and self._records_since_consolidation is not None
             and self._records_since_consolidation >= self._config.consolidation_interval_records
         ):
             try:

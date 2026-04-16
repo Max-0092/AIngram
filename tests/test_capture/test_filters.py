@@ -25,15 +25,17 @@ class TestNocaptureOptOut:
         record = _make_record(user_prompt='refactor the database connection pooling logic')
         assert apply_filters(record, config) is not None
 
-    def test_short_prompt_dropped(self):
-        config = CaptureConfig()
-        record = _make_record(user_prompt='looks good')
-        assert apply_filters(record, config) is None
+    def test_short_decision_kept(self):
+        # Short confirmations are decisions in context — they must not be filtered.
+        for prompt in ('looks good', 'yes', 'lets do that', 'agreed'):
+            record = _make_record(user_prompt=prompt)
+            assert apply_filters(record, config=CaptureConfig()) is not None, \
+                f'"{prompt}" should be kept as a decision'
 
-    def test_short_prompt_with_tool_calls_kept(self):
+    def test_empty_prompt_dropped(self):
         config = CaptureConfig()
-        record = _make_record(user_prompt='yes', tool_calls='{"tool_name": "Edit"}')
-        assert apply_filters(record, config) is not None
+        record = _make_record(user_prompt='   ')
+        assert apply_filters(record, config) is None
 
 
 class TestSecretRedaction:

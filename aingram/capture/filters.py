@@ -7,34 +7,18 @@ from functools import lru_cache
 from aingram.capture.config import CaptureConfig, resolve_container_tag
 from aingram.capture.types import CaptureRecord
 
-_MIN_CONTENT_LENGTH = 40
-
 
 @lru_cache(maxsize=64)
 def _compile_pattern(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern)
 
 
-def _extract_text(raw: str) -> str:
-    """Pull the plain-text value out of a JSON-wrapped prompt, or return as-is."""
-    if raw.startswith('{"text":'):
-        try:
-            import json
-
-            return json.loads(raw).get('text', raw)
-        except (ValueError, TypeError):
-            pass
-    return raw
-
-
 def apply_filters(record: CaptureRecord, config: CaptureConfig) -> CaptureRecord | None:
     if '@nocapture' in (record.user_prompt or ''):
         return None
 
-    # Skip low-substance records (short acknowledgments like "looks good", "yes")
-    prompt_text = _extract_text(record.user_prompt or '')
-    response_text = _extract_text(record.assistant_response or '')
-    if not record.tool_calls and len(prompt_text) + len(response_text) < _MIN_CONTENT_LENGTH:
+    # Skip truly empty prompts (no content at all).
+    if not (record.user_prompt or '').strip() and not (record.assistant_response or '').strip():
         return None
 
     user_prompt = record.user_prompt or ''

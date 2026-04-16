@@ -128,6 +128,9 @@ class TestAutoConsolidation:
             consolidation_interval_records=interval,
         )
         queue = CaptureQueue(queue_db)
+        if isinstance(store, MagicMock):
+            # Ensure counter seeds to 0 so tests exercise only session-drained records.
+            store.unconsolidated_count.return_value = 0
         drain = CaptureDrain(
             queue=queue,
             config=config,
@@ -208,3 +211,18 @@ class TestAutoConsolidation:
         drain.process_batch()
         mock_store.consolidate.assert_not_called()
         drain.close()
+
+    def test_prior_session_entries_seed_counter(self, tmp_path):
+        # Entries accumulated before the daemon restarted must count toward the interval.
+        # Here the DB already has 4 unconsolidated entries; interval is 5.
+        # Draining 1 new record should bring the total to 5 and trigger consolidation.
+        mock_store = MagicMock()
+        drain, queue = self._make_drain(tmp_path, interval=5, store=mock_store)
+        # Override after helper (counter seeds lazily on first process_batch, not at init).
+        mock_store.unconsolidated_count.return_value = 4
+
+        queue.insert(_make_record(user_prompt='the one new record', timestamp=1000.0))
+        drain.process_batch()
+
+        assert drain._records_since_consolidation == 0  # reset after successful consolidation
+        mock_store.consolidate.assert_called_once()

@@ -59,37 +59,107 @@ class TestClaudeCodeAdapter:
         assert records[0].session_id == 'sess-hook'
         assert records[0].project_path == '/home/user/project'
 
-    def test_parse_hook_post_tool_use(self):
-        payload = {
-            'session_id': 'sess-hook',
-            'hook_event_name': 'PostToolUse',
-            'tool_name': 'Edit',
-            'tool_input': {'file_path': '/src/main.py', 'old_string': 'a', 'new_string': 'b'},
-            'tool_response': {'content': 'file edited'},
-            'tool_use_id': 'tu-123',
-            'cwd': '/home/user/project',
-        }
-        records = self.adapter.parse_payload(payload)
-        assert len(records) == 1
-        assert records[0].source_tool == 'claude_code'
-        assert '[Edit]' in records[0].user_prompt
-        assert records[0].session_id == 'sess-hook'
-        assert records[0].project_path == '/home/user/project'
-        assert records[0].tool_calls is not None
-        assert 'Edit' in records[0].tool_calls
-
-    def test_skip_read_only_tools(self):
-        for tool in ('Read', 'Glob', 'Grep'):
+    def test_non_research_post_tool_use_skipped(self):
+        # Implementation mechanics — not decisions, not research.
+        for tool in ('Edit', 'Bash', 'Write', 'Read', 'Grep', 'Glob', 'TaskUpdate'):
             payload = {
                 'session_id': 'sess-hook',
                 'hook_event_name': 'PostToolUse',
                 'tool_name': tool,
-                'tool_input': {'path': '/src'},
+                'tool_input': {'file_path': '/src/main.py'},
                 'tool_response': {'content': 'result'},
-                'tool_use_id': 'tu-456',
+                'tool_use_id': 'tu-123',
             }
             records = self.adapter.parse_payload(payload)
-            assert records == [], f'{tool} should be skipped'
+            assert records == [], f'PostToolUse/{tool} should be skipped'
+
+    def test_web_search_captured(self):
+        payload = {
+            'session_id': 'sess-hook',
+            'hook_event_name': 'PostToolUse',
+            'tool_name': 'WebSearch',
+            'tool_input': {'query': 'sqlite-vec vector search performance'},
+            'tool_response': {
+                'results': [
+                    {'title': 'sqlite-vec docs', 'url': 'https://example.com', 'snippet': 'Fast KNN search'},
+                ]
+            },
+            'tool_use_id': 'tu-ws',
+        }
+        records = self.adapter.parse_payload(payload)
+        assert len(records) == 1
+        assert 'sqlite-vec vector search performance' in records[0].user_prompt
+        assert 'sqlite-vec docs' in (records[0].assistant_response or '')
+
+    def test_web_fetch_captured(self):
+        payload = {
+            'session_id': 'sess-hook',
+            'hook_event_name': 'PostToolUse',
+            'tool_name': 'WebFetch',
+            'tool_input': {
+                'url': 'https://example.com/docs',
+                'prompt': 'Extract the API endpoint list',
+            },
+            'tool_response': {'content': 'API endpoints: /v1/search, /v1/store'},
+            'tool_use_id': 'tu-wf',
+        }
+        records = self.adapter.parse_payload(payload)
+        assert len(records) == 1
+        assert 'https://example.com/docs' in records[0].user_prompt
+        assert 'Extract the API endpoint list' in records[0].user_prompt
+
+    def test_agent_dispatch_captured(self):
+        payload = {
+            'session_id': 'sess-hook',
+            'hook_event_name': 'PostToolUse',
+            'tool_name': 'Agent',
+            'tool_input': {
+                'description': 'Research vector DB benchmarks',
+                'subagent_type': 'Explore',
+                'prompt': 'Find performance comparisons...',
+            },
+            'tool_response': {'result': 'Found: chroma is 2x slower than sqlite-vec'},
+            'tool_use_id': 'tu-ag',
+        }
+        records = self.adapter.parse_payload(payload)
+        assert len(records) == 1
+        assert 'Research vector DB benchmarks' in records[0].user_prompt
+        assert 'Explore' in records[0].user_prompt
+
+    def test_stop_event_captures_last_assistant_message(self):
+        payload = {
+            'session_id': 'sess-stop',
+            'hook_event_name': 'Stop',
+            'last_assistant_message': 'Option A is recommended because it avoids all public exposure. The provider stays local and only results get submitted.',
+            'cwd': '/home/user/project',
+            'stop_hook_active': False,
+        }
+        records = self.adapter.parse_payload(payload)
+        assert len(records) == 1
+        assert 'Option A is recommended' in records[0].user_prompt
+        assert records[0].session_id == 'sess-stop'
+        assert records[0].project_path == '/home/user/project'
+
+    def test_stop_event_empty_message_skipped(self):
+        payload = {
+            'session_id': 'sess-stop',
+            'hook_event_name': 'Stop',
+            'last_assistant_message': '',
+            'stop_hook_active': False,
+        }
+        assert self.adapter.parse_payload(payload) == []
+
+    def test_stop_event_truncates_long_messages(self):
+        long_msg = 'x' * 9000
+        payload = {
+            'session_id': 'sess-stop',
+            'hook_event_name': 'Stop',
+            'last_assistant_message': long_msg,
+            'stop_hook_active': False,
+        }
+        records = self.adapter.parse_payload(payload)
+        assert len(records) == 1
+        assert len(records[0].user_prompt) == 6000
 
     def test_installation_instructions_contains_curl(self):
         instructions = self.adapter.get_installation_instructions()

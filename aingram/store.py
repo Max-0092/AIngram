@@ -908,6 +908,10 @@ class MemoryStore:
 
             eng._conn.commit()
 
+    def unconsolidated_count(self) -> int:
+        """Return the number of memory entries that have not yet been consolidated."""
+        return self._engine.get_unconsolidated_entry_count()
+
     @property
     def stats(self) -> dict:
         db_size = os.path.getsize(self._db_path) if os.path.exists(self._db_path) else 0

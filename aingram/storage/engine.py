@@ -913,6 +913,13 @@ class StorageEngine:
         with self._lock:
             return self._conn.execute('SELECT COUNT(*) FROM memory_entries').fetchone()[0]
 
+    def get_unconsolidated_entry_count(self) -> int:
+        self._check_open()
+        with self._lock:
+            return self._conn.execute(
+                'SELECT COUNT(*) FROM memory_entries WHERE consolidated = 0'
+            ).fetchone()[0]
+
     def update_entry_access(self, entry_id: str) -> None:
         self._check_open()
         now = datetime.now(UTC).isoformat()
