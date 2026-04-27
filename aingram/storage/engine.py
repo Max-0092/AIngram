@@ -68,6 +68,10 @@ class StorageEngine:
         try:
             self._conn = sqlite3.connect(db_path, check_same_thread=False)
             self._conn.execute('PRAGMA journal_mode=WAL')
+            # WAL + synchronous=NORMAL: durable against process crash; the last
+            # committed transaction may be lost on OS crash / power loss, which is
+            # an acceptable trade for a local memory store (vs the default FULL).
+            self._conn.execute('PRAGMA synchronous=NORMAL')
             self._conn.execute('PRAGMA busy_timeout=5000')
             self._conn.execute('PRAGMA foreign_keys=ON')
             self._conn.enable_load_extension(True)
@@ -663,6 +667,35 @@ class StorageEngine:
             return cursor.fetchone()[0]
         except sqlite3.Error as e:
             raise DatabaseError(str(e)) from e
+
+    def entity_mention_count(self) -> int:
+        """Return the total number of rows in entity_mentions."""
+        self._check_open()
+        with self._lock:
+            try:
+                return self._conn.execute('SELECT COUNT(*) FROM entity_mentions').fetchone()[0]
+            except sqlite3.Error as e:
+                raise DatabaseError(str(e)) from e
+
+    def reset_completed_extract_tasks(self) -> int:
+        """Mark completed extract_entities_v3 tasks as pending for re-extraction.
+
+        Returns the number of tasks reset.
+        """
+        self._check_open()
+        with self._lock:
+            try:
+                cursor = self._conn.execute(
+                    """UPDATE task_queue
+                       SET status = 'pending', claimed_at = NULL, completed_at = NULL
+                       WHERE status = 'completed' AND task_type = ?""",
+                    ('extract_entities_v3',),
+                )
+                self._conn.commit()
+                return cursor.rowcount
+            except sqlite3.Error as e:
+                self._conn.rollback()
+                raise DatabaseError(str(e)) from e
 
     # ------------------------------------------------------------------ v3 API
 
