@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Claude Code hook integration** (`aingram hook install`): AIngram can now inject relevant memories as context into Claude Code before every prompt and before file edits. Patches `~/.claude/settings.json` to register a non-blocking `UserPromptSubmit` / `PreToolUse` hook. Memories appear as `<aingram-memory>` XML blocks in the Claude Code context. Uninstall with `aingram hook uninstall`.
+- **Recall daemon** (`aingram recall-daemon start|stop|status`): a persistent loopback HTTP server on `localhost:7750` that wraps `MemoryStore.recall`. Pre-warms the ONNX JIT kernel on startup for consistent sub-2s hook responses. Idles down automatically after 30 minutes without traffic. The hook auto-spawns the daemon if it is not running.
+- **Hook config** (`~/.aingram/hook.toml`): controls `project_boost` (prefer memories from the current working directory), `seen_demote` (reduce weight of already-surfaced memories), per-event `limit` / `score_threshold`, and seen-set deduplication (prevents the same memory from being re-injected every turn). Override via `AINGRAM_HOOK_DISABLED`, `AINGRAM_HOOK_PROMPT_LIMIT`, `AINGRAM_HOOK_EDIT_LIMIT`, `AINGRAM_HOOK_PROJECT_BOOST`, `AINGRAM_HOOK_TIMEOUT_MS`.
+- **`python -m aingram`**: the package can now be invoked as `python -m aingram <subcommand>` in addition to the `aingram` console script.
+- **Wheel includes `aingram_cc_hook.py`**: the hook entry-point shim is bundled in the wheel via `force-include` so `aingram hook install` works correctly after a `pip install`.
+- **Capture drain startup consolidation:** `CaptureDrain` now checks the unconsolidated entry backlog at startup and pre-seeds the consolidation counter from the DB; if the backlog already meets the threshold (e.g. entries accumulated while the daemon was stopped), consolidation fires immediately rather than waiting for the next drain cycle.
+- **Capture filters:** empty-record check now passes through records that carry `tool_calls` data even when `user_prompt` and `assistant_response` are absent; previously those records were silently dropped.
+- **Ollama thinking-model support:** `LocalExtractor` sends `options.think=false` to Ollama, disabling the reasoning pass on models that support it (e.g. DeepSeek-R1 variants). Handles the empty-`response` case those models can produce gracefully.
+- **Storage:** added `get_incomplete_task_count()` (counts `pending` + `claimed` tasks, for polling until all work is truly complete) and `rerank_by_vector()` (semantic alias for `search_vectors_filtered`, used by the QJL two-pass pipeline).
+
 ## 1.2.2
 
 - **Capture filters:** drop low-substance turns when there are no `tool_calls` and combined prompt + response text is shorter than 40 characters (after resolving JSON `{"text":...}` wrappers).

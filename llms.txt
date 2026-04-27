@@ -138,6 +138,11 @@ capture status                    show daemon status, tool toggles, and queue de
 capture on [TOOLS...]             enable capture for tools (all if omitted)
 capture off [TOOLS...]            disable capture for tools (all if omitted)
 capture install TOOL              print hook setup instructions for a tool
+recall-daemon start               start the recall daemon on localhost:7750 (blocks; auto-spawned by hook)
+recall-daemon stop                stop the recall daemon
+recall-daemon status              show daemon liveness and ONNX warmup status
+hook install [--settings PATH]   register AIngram as a Claude Code UserPromptSubmit / PreToolUse hook
+hook uninstall [--settings PATH] remove AIngram hook entries from Claude Code settings
 ```
 
 ## Framework Integrations
@@ -243,6 +248,11 @@ Environment variables (all optional):
   AINGRAM_CONTRADICTION_THRESHOLD   float 0.0–1.0 DeBERTa confidence cutoff (default: 0.7)
   AINGRAM_CAPTURE_ENABLED           true | false (default: false) — enable capture daemon
   AINGRAM_CAPTURE_PORT              int (default: 7749) — capture daemon port
+  AINGRAM_HOOK_DISABLED             true | false (default: false) — disable the Claude Code hook
+  AINGRAM_HOOK_PROMPT_LIMIT         int (default: 8) — max memories injected on UserPromptSubmit
+  AINGRAM_HOOK_EDIT_LIMIT           int (default: 3) — max memories injected on PreToolUse
+  AINGRAM_HOOK_PROJECT_BOOST        float (default: 0.003) — score boost for memories from cwd
+  AINGRAM_HOOK_TIMEOUT_MS           int (default: 2000) — hook response timeout in milliseconds
 ```
 
 Config file: `~/.aingram/config.toml` — same keys as env vars, without the `AINGRAM_` prefix:
@@ -267,6 +277,23 @@ container_tag = "claude_code"
 
 [capture.tools.chatgpt]
 enabled = false
+```
+
+Hook config file: `~/.aingram/hook.toml` — controls context injection into Claude Code:
+
+```toml
+[scoring]
+project_boost = 0.003        # extra score weight for memories from the current directory
+seen_demote = 0.004          # score penalty for memories already surfaced this session
+prompt_limit = 8             # max memories injected on UserPromptSubmit
+prompt_score_threshold = 0.005
+edit_limit = 3               # max memories injected on PreToolUse (Edit/Write/NotebookEdit)
+edit_score_threshold = 0.007
+
+[session]
+seen_cap = 200               # max seen-set entries per session
+stale_days = 7               # days before seen-set files are pruned
+idle_shutdown_seconds = 1800 # recall daemon idle-shutdown timeout (30 min)
 ```
 
 ## Optional: more detail

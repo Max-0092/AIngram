@@ -305,6 +305,45 @@ Captured interactions flow through a filter pipeline (`@nocapture` opt-out, secr
 
 ---
 
+## Claude Code Hook
+
+AIngram can inject relevant memories directly into Claude Code's context window — before every prompt you type and before every file edit. This lets Claude Code see what you've learned across sessions without you having to ask.
+
+```bash
+aingram hook install        # patches ~/.claude/settings.json
+aingram hook uninstall      # removes the hook entries
+```
+
+Under the hood, `hook install` registers `aingram_cc_hook.py` as a non-blocking `UserPromptSubmit` and `PreToolUse` hook. On each trigger, AIngram queries the recall daemon for relevant memories and writes them as an `<aingram-memory>` XML block for Claude Code to consume. No token budget is consumed unless a relevant memory is found.
+
+**Recall daemon** — the hook communicates with a local HTTP server (`localhost:7750`) that keeps the ONNX embedding model warm so hook responses stay under the 2-second timeout:
+
+```bash
+aingram recall-daemon start    # foreground (the hook auto-spawns this if needed)
+aingram recall-daemon stop
+aingram recall-daemon status
+```
+
+The daemon shuts itself down after 30 minutes of inactivity.
+
+**Hook config** (`~/.aingram/hook.toml`):
+
+```toml
+[scoring]
+project_boost = 0.003        # extra weight for memories from the current directory
+seen_demote = 0.004          # penalty for memories already surfaced this session
+prompt_limit = 8             # max memories injected on UserPromptSubmit
+edit_limit = 3               # max memories injected on PreToolUse (Edit/Write)
+
+[session]
+seen_cap = 200               # max seen-set size per session
+stale_days = 7               # days before seen-set files are pruned
+```
+
+Override any value via env vars: `AINGRAM_HOOK_DISABLED`, `AINGRAM_HOOK_PROMPT_LIMIT`, `AINGRAM_HOOK_EDIT_LIMIT`, `AINGRAM_HOOK_PROJECT_BOOST`, `AINGRAM_HOOK_TIMEOUT_MS`.
+
+---
+
 ## Configuration
 
 Precedence: constructor kwargs → env vars → `~/.aingram/config.toml` → defaults.
