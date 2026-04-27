@@ -249,6 +249,63 @@ class TestDeBERTaContradictionClassifier:
         assert verdict.confidence < 0.7
         assert verdict.superseded_index is None
 
+    def test_classify_batch_runs_single_onnx_call_per_chunk(self):
+        from aingram.consolidation.deberta import DeBERTaContradictionClassifier
+
+        classifier = DeBERTaContradictionClassifier(threshold=0.7, batch_size=16)
+
+        mock_session = MagicMock()
+        # Logits for three pairs: two contradictions, one entailment
+        mock_session.run.return_value = [
+            np.array([[0.1, 0.2, 3.0], [3.0, 0.2, 0.1], [0.1, 0.2, 3.0]])
+        ]
+        mock_session.get_inputs.return_value = [
+            MagicMock(name='input_ids'),
+            MagicMock(name='attention_mask'),
+            MagicMock(name='token_type_ids'),
+        ]
+        # MagicMock(name=...) doesn't set .name, so set manually
+        names = ['input_ids', 'attention_mask', 'token_type_ids']
+        for inp, name in zip(mock_session.get_inputs.return_value, names):
+            inp.name = name
+
+        mock_tokenizer = MagicMock()
+
+        def _make_enc(ids, mask, types):
+            enc = MagicMock()
+            enc.ids = ids
+            enc.attention_mask = mask
+            enc.type_ids = types
+            return enc
+
+        mock_tokenizer.encode_batch.return_value = [
+            _make_enc([0, 1, 2], [1, 1, 1], [0, 0, 1]),
+            _make_enc([0, 1, 2, 3], [1, 1, 1, 1], [0, 0, 1, 1]),
+            _make_enc([0, 1], [1, 1], [0, 1]),
+        ]
+
+        classifier._session = mock_session
+        classifier._tokenizer = mock_tokenizer
+
+        verdicts = classifier.classify_batch(
+            [('a', 'b'), ('c', 'd'), ('e', 'f')]
+        )
+        assert len(verdicts) == 3
+        assert verdicts[0].contradicts is True
+        assert verdicts[1].contradicts is False
+        assert verdicts[2].contradicts is True
+        # One ONNX run for the whole batch
+        assert mock_session.run.call_count == 1
+        # Check the batch dims on the feed
+        feed = mock_session.run.call_args.args[1]
+        assert feed['input_ids'].shape == (3, 4)  # padded to max_len=4
+
+    def test_classify_batch_empty_returns_empty(self):
+        from aingram.consolidation.deberta import DeBERTaContradictionClassifier
+
+        classifier = DeBERTaContradictionClassifier()
+        assert classifier.classify_batch([]) == []
+
     def test_ensure_loaded_raises_model_not_found_on_failure(self):
         from aingram.consolidation.deberta import DeBERTaContradictionClassifier
         from aingram.exceptions import ModelNotFoundError

@@ -93,40 +93,48 @@ class ContradictionDetector:
         for entity_id, entry_id in entity_pairs:
             entity_entries.setdefault(entity_id, []).append(entry_id)
 
+        candidate_pairs = self._collect_candidate_pairs(entity_entries)
+        if not candidate_pairs:
+            return ContradictionResult(contradictions_found=0, contradictions_resolved=0)
+
+        # Fetch all involved entries in a single query
+        unique_ids = list({eid for pair in candidate_pairs for eid in pair})
+        by_id = {e.entry_id: e for e in self._engine.get_entries_by_ids(unique_ids)}
+
+        # Filter natural supersession pairs before hitting the classifier
+        classifier_pairs: list[tuple[MemoryEntry, MemoryEntry]] = []
+        for id_a, id_b in candidate_pairs:
+            entry_a = by_id.get(id_a)
+            entry_b = by_id.get(id_b)
+            if entry_a is None or entry_b is None:
+                continue
+            type_pair = frozenset({str(entry_a.entry_type), str(entry_b.entry_type)})
+            if type_pair in _NATURAL_SUPERSESSION_PAIRS:
+                continue
+            classifier_pairs.append((entry_a, entry_b))
+
+        if not classifier_pairs:
+            return ContradictionResult(contradictions_found=0, contradictions_resolved=0)
+
+        verdicts = self._classify_pairs(classifier_pairs)
+
         found = 0
         resolved = 0
-        checked: set[frozenset[str]] = set()
-        total_checked = 0
+        updates: list[tuple[str, float]] = []
+        for (entry_a, entry_b), verdict in zip(classifier_pairs, verdicts):
+            superseded = self._resolve_verdict(entry_a, entry_b, verdict)
+            if superseded is None:
+                continue
+            found += 1
+            updates.append(
+                (superseded.entry_id, superseded.importance * _SUPERSEDED_IMPORTANCE_FACTOR)
+            )
+            resolved += 1
 
-        for entry_ids in entity_entries.values():
-            if total_checked >= _MAX_TOTAL_PAIRS:
-                break
-            pairs_checked = 0
-            for id_a, id_b in combinations(entry_ids, 2):
-                if total_checked >= _MAX_TOTAL_PAIRS:
-                    break
-                pair_key = frozenset({id_a, id_b})
-                if pair_key in checked or pairs_checked >= _MAX_PAIRS_PER_ENTITY:
-                    continue
-                checked.add(pair_key)
-                pairs_checked += 1
-                total_checked += 1
+        if updates:
+            self._engine.batch_update_entry_importance(updates)
 
-                result = self._check_pair(id_a, id_b)
-                if result is not None:
-                    superseded_id, superseded_entry = result
-                    found += 1
-                    self._engine.batch_update_entry_importance(
-                        [
-                            (
-                                superseded_id,
-                                superseded_entry.importance * _SUPERSEDED_IMPORTANCE_FACTOR,
-                            )
-                        ]
-                    )
-                    resolved += 1
-
-        if total_checked >= _MAX_TOTAL_PAIRS:
+        if len(candidate_pairs) >= _MAX_TOTAL_PAIRS:
             logger.info(
                 'Contradiction detection hit global cap (%d pairs); '
                 'remaining pairs deferred to next consolidation run',
@@ -135,35 +143,56 @@ class ContradictionDetector:
 
         return ContradictionResult(contradictions_found=found, contradictions_resolved=resolved)
 
-    def _check_pair(self, id_a: str, id_b: str) -> tuple[str, MemoryEntry] | None:
-        entries = self._engine.get_entries_by_ids([id_a, id_b])
-        if len(entries) != 2:
-            return None
+    def _collect_candidate_pairs(
+        self, entity_entries: dict[str, list[str]]
+    ) -> list[tuple[str, str]]:
+        # Note: natural-supersession filtering happens after this step (in detect_and_resolve)
+        # because entry types aren't available here without an extra DB query. This means
+        # supersession pairs count toward _MAX_TOTAL_PAIRS, potentially deferring valid
+        # contradiction pairs to the next consolidation run. Acceptable for the current scale.
+        checked: set[frozenset[str]] = set()
+        pairs: list[tuple[str, str]] = []
+        for entry_ids in entity_entries.values():
+            if len(pairs) >= _MAX_TOTAL_PAIRS:
+                break
+            pairs_this_entity = 0
+            for id_a, id_b in combinations(entry_ids, 2):
+                if len(pairs) >= _MAX_TOTAL_PAIRS:
+                    break
+                if pairs_this_entity >= _MAX_PAIRS_PER_ENTITY:
+                    break
+                pair_key = frozenset({id_a, id_b})
+                if pair_key in checked:
+                    continue
+                checked.add(pair_key)
+                pairs_this_entity += 1
+                pairs.append((id_a, id_b))
+        return pairs
 
-        by_id = {e.entry_id: e for e in entries}
-        entry_a, entry_b = by_id[id_a], by_id[id_b]
+    def _classify_pairs(
+        self, pairs: list[tuple[MemoryEntry, MemoryEntry]]
+    ) -> list[ContradictionVerdict]:
+        texts = [
+            (sanitize_for_prompt(a.content), sanitize_for_prompt(b.content))
+            for a, b in pairs
+        ]
+        batch_fn = getattr(self._classifier, 'classify_batch', None)
+        if callable(batch_fn):
+            return list(batch_fn(texts))
+        return [self._classifier.classify(a, b) for a, b in texts]
 
-        # Skip entry-type pairs where supersession is natural
-        type_pair = frozenset({str(entry_a.entry_type), str(entry_b.entry_type)})
-        if type_pair in _NATURAL_SUPERSESSION_PAIRS:
-            return None
-
-        verdict = self._classifier.classify(
-            sanitize_for_prompt(entry_a.content),
-            sanitize_for_prompt(entry_b.content),
-        )
-
+    @staticmethod
+    def _resolve_verdict(
+        entry_a: MemoryEntry,
+        entry_b: MemoryEntry,
+        verdict: ContradictionVerdict,
+    ) -> MemoryEntry | None:
         if not verdict.contradicts:
             return None
-
         if verdict.superseded_index is not None:
             if verdict.superseded_index not in (0, 1):
                 return None
             ordered = [entry_a, entry_b]
-            superseded = ordered[verdict.superseded_index]
-            return superseded.entry_id, superseded
-
+            return ordered[verdict.superseded_index]
         # Recency fallback: older entry is superseded
-        if entry_a.created_at <= entry_b.created_at:
-            return entry_a.entry_id, entry_a
-        return entry_b.entry_id, entry_b
+        return entry_a if entry_a.created_at <= entry_b.created_at else entry_b
