@@ -17,8 +17,13 @@ def apply_filters(record: CaptureRecord, config: CaptureConfig) -> CaptureRecord
     if '@nocapture' in (record.user_prompt or ''):
         return None
 
-    # Skip truly empty prompts (no content at all).
-    if not (record.user_prompt or '').strip() and not (record.assistant_response or '').strip():
+    # Skip truly empty prompts (no content at all). Tool-use records carry
+    # their payload in `tool_calls` rather than prompt/response, so count that.
+    if (
+        not (record.user_prompt or '').strip()
+        and not (record.assistant_response or '').strip()
+        and not (record.tool_calls or '').strip()
+    ):
         return None
 
     user_prompt = record.user_prompt or ''

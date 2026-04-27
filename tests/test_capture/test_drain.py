@@ -226,3 +226,56 @@ class TestAutoConsolidation:
 
         assert drain._records_since_consolidation == 0  # reset after successful consolidation
         mock_store.consolidate.assert_called_once()
+
+
+class TestStartupConsolidation:
+    def _make_drain(self, tmp_path, interval: int, store=None):
+        queue_db = str(tmp_path / 'queue.db')
+        config = CaptureConfig(
+            poll_interval=0.1,
+            drain_batch_size=10,
+            consolidation_interval_records=interval,
+        )
+        queue = CaptureQueue(queue_db)
+        if isinstance(store, MagicMock):
+            store.unconsolidated_count.return_value = 0
+        drain = CaptureDrain(
+            queue=queue,
+            config=config,
+            store=store,
+            memory_db_path='',
+            embedder=MockEmbedder(),
+        )
+        return drain, queue
+
+    def test_startup_fires_consolidation_when_overdue(self, tmp_path):
+        # DB already has 60 entries; interval is 50 → consolidation must fire on startup.
+        mock_store = MagicMock()
+        drain, _ = self._make_drain(tmp_path, interval=50, store=mock_store)
+        mock_store.unconsolidated_count.return_value = 60
+
+        drain._startup_consolidation_check()
+
+        mock_store.consolidate.assert_called_once()
+        assert drain._records_since_consolidation == 0
+
+    def test_startup_seeds_counter_when_below_threshold(self, tmp_path):
+        # DB has 30 entries; interval is 50 → no consolidation, but counter seeds to 30.
+        mock_store = MagicMock()
+        drain, _ = self._make_drain(tmp_path, interval=50, store=mock_store)
+        mock_store.unconsolidated_count.return_value = 30
+
+        drain._startup_consolidation_check()
+
+        mock_store.consolidate.assert_not_called()
+        assert drain._records_since_consolidation == 30
+
+    def test_startup_zero_interval_skips_check(self, tmp_path):
+        mock_store = MagicMock()
+        drain, _ = self._make_drain(tmp_path, interval=0, store=mock_store)
+        mock_store.unconsolidated_count.return_value = 999
+
+        drain._startup_consolidation_check()
+
+        mock_store.consolidate.assert_not_called()
+        assert drain._records_since_consolidation is None  # untouched

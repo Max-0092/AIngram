@@ -69,10 +69,30 @@ class CaptureDrain:
             self._store = None
 
     def _run(self) -> None:
+        self._startup_consolidation_check()
         while not self._stop.is_set():
             count = self.process_batch()
             if count == 0:
                 self._stop.wait(self._config.poll_interval)
+
+    def _startup_consolidation_check(self) -> None:
+        """Fire consolidation on startup if the DB already has a backlog."""
+        interval = self._config.consolidation_interval_records
+        if interval <= 0:
+            return
+        try:
+            existing = self._get_store().unconsolidated_count()
+            self._records_since_consolidation = existing
+            if existing >= interval:
+                logger.info(
+                    'Startup: %d unconsolidated entries >= interval %d, running consolidation',
+                    existing,
+                    interval,
+                )
+                self._get_store().consolidate()
+                self._records_since_consolidation = 0
+        except Exception as e:
+            logger.error('Startup consolidation check failed: %s', e, exc_info=True)
 
     def process_batch(self) -> int:
         batch = self._queue.dequeue_batch(self._config.drain_batch_size)

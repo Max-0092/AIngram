@@ -266,6 +266,15 @@ def run_daemon(
     sentinel_thread = threading.Thread(target=_sentinel_monitor, daemon=True)
     sentinel_thread.start()
 
+    # Write the real serving PID. On Windows, the venv python.exe is a small
+    # launcher stub that spawns the real interpreter as a child — so the PID
+    # captured by `subprocess.Popen` in `aingram capture start --daemon` is the
+    # stub, not us. Overwrite it with our own PID so `stop` / diagnostics point
+    # at the process actually holding port 7749.
+    pid_file = Path.home() / '.aingram' / 'capture.pid'
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding='utf-8')
+
     try:
         uvicorn.run(app, host=config.host, port=config.port, log_level='info')
     finally:
@@ -276,7 +285,6 @@ def run_daemon(
             worker.stop()
         drain.close()
         store.close()
-        pid_file = Path.home() / '.aingram' / 'capture.pid'
         if pid_file.exists():
             try:
                 pid_file.unlink()
