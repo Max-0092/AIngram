@@ -4,6 +4,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from aingram.graph.builder import GraphBuilder
 from aingram.processing.protocols import EntityExtractor, LLMProcessor
@@ -30,6 +33,7 @@ class BackgroundWorker:
         llm: LLMProcessor | None = None,
         entity_types: list[str] | None = None,
         poll_interval: float = 0.1,
+        concurrency: int = 1,
         training_logger=None,
     ) -> None:
         if engine is not None:
@@ -52,6 +56,7 @@ class BackgroundWorker:
             'technology',
         ]
         self._poll_interval = poll_interval
+        self._concurrency = max(1, concurrency)
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._builder = GraphBuilder(self._engine)
@@ -72,7 +77,90 @@ class BackgroundWorker:
         task = self._engine.dequeue_task()
         if task is None:
             return False
-        task_id, task_type, payload = task
+        self._execute_task(*task)
+        return True
+
+    def drain(
+        self,
+        *,
+        progress_callback: Callable[[], None] | None = None,
+    ) -> int:
+        """Drain all pending tasks using the configured concurrency; blocks until empty.
+
+        A task may enqueue follow-ups (e.g. extract_entities_v3 → link_graph_v3);
+        drain waits until both the pending queue AND all in-flight workers are idle.
+        Returns the number of tasks processed.
+        """
+        if self._concurrency == 1:
+            return self._drain_serial(progress_callback)
+        return self._drain_parallel(progress_callback)
+
+    def _drain_serial(self, progress_callback: Callable[[], None] | None) -> int:
+        done = 0
+        consecutive_empty = 0
+        while consecutive_empty < 3 and not self._stop_event.is_set():
+            if self.process_one():
+                done += 1
+                consecutive_empty = 0
+                if progress_callback is not None:
+                    progress_callback()
+            else:
+                consecutive_empty += 1
+                time.sleep(self._poll_interval)
+        return done
+
+    def _drain_parallel(self, progress_callback: Callable[[], None] | None) -> int:
+        state = {'done': 0, 'active': 0}
+        state_lock = threading.Lock()
+        local_stop = threading.Event()
+
+        def worker_fn() -> None:
+            while not local_stop.is_set() and not self._stop_event.is_set():
+                task = self._engine.dequeue_task()
+                if task is None:
+                    time.sleep(self._poll_interval)
+                    continue
+                with state_lock:
+                    state['active'] += 1
+                try:
+                    self._execute_task(*task)
+                    with state_lock:
+                        state['done'] += 1
+                    if progress_callback is not None:
+                        try:
+                            progress_callback()
+                        except Exception:
+                            logger.warning('progress_callback raised', exc_info=True)
+                finally:
+                    with state_lock:
+                        state['active'] -= 1
+
+        with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
+            futures = [pool.submit(worker_fn) for _ in range(self._concurrency)]
+            try:
+                while not self._stop_event.is_set():
+                    time.sleep(self._poll_interval)
+                    with state_lock:
+                        active = state['active']
+                    pending = self._engine.get_pending_task_count()
+                    if active == 0 and pending == 0:
+                        # Settle: a worker may have dequeued a task (removing it from
+                        # pending) but not yet incremented active. One poll_interval is
+                        # enough for that window to close and for any follow-up enqueues
+                        # to become visible before we declare the queue idle.
+                        time.sleep(self._poll_interval)
+                        with state_lock:
+                            active = state['active']
+                        pending = self._engine.get_pending_task_count()
+                        if active == 0 and pending == 0:
+                            break
+            finally:
+                local_stop.set()
+            for f in futures:
+                f.result()
+        return state['done']
+
+    def _execute_task(self, task_id: str, task_type: str, payload: dict) -> None:
         try:
             if task_type == 'extract_entities_v3':
                 self._handle_extract_entities_v3(payload)
@@ -84,11 +172,20 @@ class BackgroundWorker:
         except Exception as e:
             logger.error('Task %s failed: %s', task_id, e, exc_info=True)
             self._engine.fail_task(task_id, str(e))
-        return True
 
     def _run(self) -> None:
-        import time
+        if self._concurrency == 1:
+            while not self._stop_event.is_set():
+                if not self.process_one():
+                    time.sleep(self._poll_interval)
+            return
 
+        with ThreadPoolExecutor(max_workers=self._concurrency) as pool:
+            futures = [pool.submit(self._worker_loop) for _ in range(self._concurrency)]
+            for f in futures:
+                f.result()
+
+    def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             if not self.process_one():
                 time.sleep(self._poll_interval)
@@ -100,24 +197,26 @@ class BackgroundWorker:
             logger.warning('Entry %s not found for extraction', entry_id)
             return
 
-        # Parse content text for extraction
         try:
             content_dict = json.loads(entry.content)
             text = content_dict.get('text', entry.content)
         except (json.JSONDecodeError, TypeError):
             text = entry.content
 
-        entities = self._extractor.extract(text, self._entity_types)
-        entity_names = []
-        for extracted in entities:
-            self._builder.upsert_entity(
-                extracted.name,
-                extracted.entity_type,
-                source_entry=entry_id,
-            )
-            entity_names.append(extracted.name)
+        # Prefer extract_full when the extractor supports it — one LLM call
+        # for entities + relationships. Otherwise fall back to entities-only
+        # and defer relationship extraction to link_graph_v3.
+        if hasattr(self._extractor, 'extract_full'):
+            result = self._extractor.extract_full(text)
+            self._upsert_entities(entry_id, result.entities)
+            self._apply_relationships(entry_id, result.relationships)
+            if self._training_logger is not None and result.entities:
+                self._training_logger.log(text, result)
+            return
 
-        # Log training pair if training logger is configured
+        entities = self._extractor.extract(text, self._entity_types)
+        entity_names = self._upsert_entities(entry_id, entities)
+
         if self._training_logger is not None and entities:
             result = ExtractionResult(
                 entry_type=str(entry.entry_type),
@@ -130,11 +229,33 @@ class BackgroundWorker:
             )
             self._training_logger.log(text, result)
 
-        # Enqueue graph linking if we found entities and have LLM
         if len(entity_names) >= 2 and self._llm is not None:
             self._engine.enqueue_task(
                 task_type='link_graph_v3',
                 payload={'entry_id': entry_id, 'entity_names': entity_names},
+            )
+
+    def _upsert_entities(
+        self, entry_id: str, entities: list[ExtractedEntity]
+    ) -> list[str]:
+        names: list[str] = []
+        for e in entities:
+            self._builder.upsert_entity(e.name, e.entity_type, source_entry=entry_id)
+            names.append(e.name)
+        return names
+
+    def _apply_relationships(self, entry_id: str, relationships) -> None:
+        for rel in relationships:
+            sources = self._engine.find_entities_by_name(rel.source)
+            targets = self._engine.find_entities_by_name(rel.target)
+            if not sources or not targets:
+                continue
+            self._builder.add_relationship(
+                sources[0].entity_id,
+                targets[0].entity_id,
+                rel.relation_type,
+                fact=rel.fact,
+                source_entry=entry_id,
             )
 
     def _handle_link_graph_v3(self, payload: dict) -> None:

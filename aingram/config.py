@@ -30,6 +30,7 @@ class AIngramConfig:
     consolidation_interval: int | None = None
     extractor_mode: str = 'none'  # 'none', 'sonnet', 'local'
     extractor_model: str = 'aingram-extractor'
+    extractor_concurrency: int = 1
     onnx_provider: str | None = None  # None=auto, 'cuda', 'npu', 'cpu'
     telemetry_enabled: bool = True  # opt-out: set false to disable anonymous usage telemetry
     fts_prefilter_threshold: int = 50
@@ -68,6 +69,8 @@ def _coerce_value(field_name: str, raw: Any) -> Any:
         return int(raw)
     if field_name in ('extractor_mode', 'extractor_model'):
         return str(raw)
+    if field_name == 'extractor_concurrency':
+        return max(1, int(raw))
     if field_name == 'onnx_provider':
         if raw is None or raw == 'None' or raw == '':
             return None
@@ -157,6 +160,8 @@ def _merge_env_into(config: AIngramConfig, env: dict[str, str]) -> AIngramConfig
         updates['extractor_mode'] = v
     if v := env.get('AINGRAM_EXTRACTOR_MODEL'):
         updates['extractor_model'] = v
+    if v := env.get('AINGRAM_EXTRACTOR_CONCURRENCY'):
+        updates['extractor_concurrency'] = max(1, int(v))
     if v := env.get('AINGRAM_ONNX_PROVIDER'):
         updates['onnx_provider'] = v if v.lower() != 'none' else None
     if v := env.get('AINGRAM_TELEMETRY_ENABLED'):
