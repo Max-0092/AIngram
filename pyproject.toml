@@ -79,3 +79,9 @@ quote-style = "single"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"
+markers = [
+    "integration: end-to-end tests that spawn subprocesses",
+]
+
+[tool.hatch.build.targets.wheel]
+force-include = { "aingram_cc_hook.py" = "aingram_cc_hook.py" }

@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import typer
+
+from aingram.recall_daemon.cli import app as _recall_daemon_app
 
 app = typer.Typer(help='AIngram — local-first agent memory CLI', no_args_is_help=True)
 
@@ -240,6 +243,42 @@ capture_app = typer.Typer(help='Capture daemon management', no_args_is_help=True
 app.add_typer(capture_app, name='capture')
 
 
+def _read_pid(pid_file) -> int | None:
+    if not pid_file.exists():
+        return None
+    try:
+        return int(pid_file.read_text(encoding='utf-8').strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """Windows-safe liveness probe.
+
+    `os.kill(pid, 0)` on Windows calls `TerminateProcess` — it would kill the
+    target, not probe it. Use `OpenProcess` with PROCESS_QUERY_LIMITED_INFORMATION
+    (0x1000) for a read-only check.
+    """
+    import os as _os
+    import sys as _sys
+
+    if _sys.platform == 'win32':
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        _os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+    return True
+
+
 @capture_app.command('start')
 def capture_start(
     ctx: typer.Context,
@@ -275,17 +314,37 @@ def capture_start(
     if daemon_mode:
         pid_file = Path.home() / '.aingram' / 'capture.pid'
         pid_file.parent.mkdir(parents=True, exist_ok=True)
+
+        existing_pid = _read_pid(pid_file)
+        if existing_pid is not None and _pid_is_alive(existing_pid):
+            typer.echo(
+                f'Capture daemon already running (PID {existing_pid}). '
+                f'Use `aingram capture stop` first.',
+                err=True,
+            )
+            queue.close()
+            raise typer.Exit(code=1)
+        if existing_pid is not None:
+            # PID file present but process dead — clean up before spawning.
+            try:
+                pid_file.unlink()
+            except OSError:
+                pass
+
         cmd = [sys.executable, '-m', 'aingram.cli', '--db', ctx.obj['db'], 'capture', 'start']
         if port is not None:
             cmd.extend(['--port', str(port)])
-        proc = subprocess.Popen(
+        # Don't write Popen's PID: on Windows the venv python.exe is a launcher
+        # stub that re-execs the real interpreter as a child, so Popen.pid is
+        # the stub, not the serving daemon. `run_daemon()` writes its own PID
+        # once uvicorn is about to bind the port.
+        subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        pid_file.write_text(str(proc.pid))
-        typer.echo(f'Capture daemon started (PID {proc.pid})')
+        typer.echo('Capture daemon starting; check `aingram capture status` in a moment.')
         queue.close()
         return
 
@@ -298,31 +357,57 @@ def capture_stop() -> None:
     import os
     import signal
     import sys
+    import time
     from pathlib import Path
 
     pid_file = Path.home() / '.aingram' / 'capture.pid'
     sentinel = Path.home() / '.aingram' / 'capture.stop'
 
-    if not pid_file.exists():
+    pid = _read_pid(pid_file)
+    if pid is None:
         typer.echo('No capture daemon PID file found.')
         raise typer.Exit(code=1)
+
+    if not _pid_is_alive(pid):
+        typer.echo(f'PID file was stale (PID {pid} not running); cleaning up.')
+        try:
+            pid_file.unlink()
+        except OSError:
+            pass
+        return
 
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.touch()
     typer.echo('Stop signal sent.')
 
-    if sys.platform != 'win32':
-        try:
-            pid = int(pid_file.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-        except (OSError, ValueError):
-            pass
+    # Give the sentinel monitor up to ~3s to trigger a clean shutdown.
+    for _ in range(30):
+        if not _pid_is_alive(pid):
+            break
+        time.sleep(0.1)
+
+    if _pid_is_alive(pid):
+        # Sentinel path didn't work — force-terminate.
+        if sys.platform == 'win32':
+            import ctypes
+
+            PROCESS_TERMINATE = 0x0001
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+            if handle:
+                ctypes.windll.kernel32.TerminateProcess(handle, 1)
+                ctypes.windll.kernel32.CloseHandle(handle)
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
 
     if pid_file.exists():
         try:
             pid_file.unlink()
         except OSError:
             pass
+    typer.echo('Capture daemon stopped.')
     typer.echo('Capture daemon stopped.')
 
 
@@ -349,9 +434,7 @@ def capture_status() -> None:
 
     if httpx is not None:
         try:
-            resp = httpx.get(
-                f'http://{capture_cfg.host}:{capture_cfg.port}/status', timeout=2.0
-            )
+            resp = httpx.get(f'http://{capture_cfg.host}:{capture_cfg.port}/status', timeout=2.0)
             typer.echo(json_mod.dumps(resp.json(), indent=2))
             return
         except httpx.HTTPError:
@@ -407,6 +490,109 @@ def _set_capture_toggles(tools: list[str], state: str) -> None:
         queue.set_toggle(tool_name, state)
         typer.echo(f'{tool_name}: {state}')
     queue.close()
+
+
+@capture_app.command('extract')
+def capture_extract(
+    ctx: typer.Context,
+    model: str | None = typer.Option(None, '--model', help='Override Ollama model'),
+    concurrency: int | None = typer.Option(
+        None,
+        '--concurrency',
+        '-j',
+        help='Parallel in-flight extraction requests (defaults to extractor_concurrency config).',
+    ),
+) -> None:
+    """Run entity extraction on all pending entries, then exit (model unloads when idle)."""
+    from aingram.config import load_merged_config
+    from aingram.worker import BackgroundWorker
+
+    merged = load_merged_config()
+    db_path = ctx.obj['db']
+    llm_model = model or merged.extractor_model
+    llm_url = merged.llm_url
+    effective_concurrency = concurrency if concurrency is not None else merged.extractor_concurrency
+    worker_concurrency = max(1, effective_concurrency)
+
+    if not llm_model:
+        typer.echo(
+            'No extractor model configured. Set extractor_model in ~/.aingram/config.toml.',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    from aingram.extraction.local import LocalExtractor
+
+    extractor = LocalExtractor(model=llm_model, base_url=llm_url)
+
+    typer.echo(f'Warming up {llm_model}...')
+    if not extractor.warmup():
+        typer.echo(f'Could not reach Ollama or load {llm_model}. Is Ollama running?', err=True)
+        raise typer.Exit(code=1)
+    typer.echo('Model ready.')
+
+    worker = BackgroundWorker(
+        db_path=db_path,
+        extractor=extractor,
+        concurrency=worker_concurrency,
+    )
+
+    # If no entity_mentions exist yet, previous runs produced nothing (e.g. timeouts).
+    # Reset completed tasks so they get a proper re-run.
+    if worker._engine.entity_mention_count() == 0:
+        reset = worker._engine.reset_completed_extract_tasks()
+        if reset:
+            typer.echo(f'Reset {reset} previously empty-completed tasks for re-extraction.')
+
+    pending_start = worker._engine.get_pending_task_count()
+
+    if pending_start == 0:
+        typer.echo('No pending extraction tasks.')
+    else:
+        suffix = f' with {worker_concurrency} workers' if worker_concurrency > 1 else ''
+        typer.echo(f'Extracting entities from {pending_start} entries using {llm_model}{suffix}...')
+
+        progress = {'count': 0}
+        progress_lock = threading.Lock()
+
+        def _tick() -> None:
+            with progress_lock:
+                progress['count'] += 1
+                count = progress['count']
+            if count % 10 == 0:
+                typer.echo(f'  {count} processed...')
+
+        done = worker.drain(progress_callback=_tick)
+
+        em_count = worker._engine.entity_mention_count()
+        typer.echo(f'Done. {done} tasks processed, {em_count} entity mentions created.')
+        if done > 0 and em_count == 0:
+            typer.echo(
+                'Warning: 0 entity mentions created — the model may not be outputting valid JSON. '
+                'Check extractor_model or run with AINGRAM_LOG_LEVEL=DEBUG for details.',
+                err=True,
+            )
+
+    worker.stop()
+    extractor.close()
+
+    typer.echo('Running consolidation...')
+    from aingram.store import MemoryStore
+
+    store = MemoryStore(db_path, agent_name='extract-cli')
+    try:
+        result = store.consolidate()
+        typer.echo(
+            f'Consolidation: {result.contradictions_resolved} contradictions resolved, '
+            f'{result.memories_merged} merged, '
+            f'{result.memories_decayed} decayed.'
+        )
+    except Exception as e:
+        typer.echo(f'Consolidation failed: {e}', err=True)
+    finally:
+        store.close()
+
+    typer.echo('Model will unload from VRAM after Ollama idle timeout (~5 min).')
 
 
 @capture_app.command('install')
@@ -469,6 +655,60 @@ def import_backup(
         typer.echo(f'Imported {path}')
     finally:
         mem.close()
+
+
+app.add_typer(_recall_daemon_app, name='recall-daemon')
+
+hook_app = typer.Typer(help='Manage Claude Code hook integration.')
+
+
+@hook_app.command('install')
+def hook_install(
+    settings_path: Path = typer.Option(
+        Path('~/.claude/settings.json').expanduser(),
+        '--settings',
+        help='Claude Code settings.json to patch',
+    ),
+    hook_script: Path = typer.Option(
+        Path(__file__).resolve().parent.parent / 'aingram_cc_hook.py',
+        '--script',
+        help='Absolute path to aingram_cc_hook.py',
+    ),
+) -> None:
+    import os
+
+    from aingram.cc_hook.config import load_hook_config
+    from aingram.cc_hook.install import install_hooks
+
+    cfg = load_hook_config(env=dict(os.environ))
+    result = install_hooks(
+        settings_path=settings_path.expanduser().resolve(),
+        hook_script=hook_script.expanduser().resolve(),
+        tool_matchers=cfg.tool_matchers,
+    )
+    if result.installed:
+        typer.echo(f'installed hooks into {settings_path}')
+    else:
+        typer.echo('hooks already installed (no changes)')
+
+
+@hook_app.command('uninstall')
+def hook_uninstall(
+    settings_path: Path = typer.Option(
+        Path('~/.claude/settings.json').expanduser(),
+        '--settings',
+    ),
+) -> None:
+    from aingram.cc_hook.install import uninstall_hooks
+
+    result = uninstall_hooks(settings_path=settings_path.expanduser().resolve())
+    if result.removed:
+        typer.echo(f'removed aingram hooks from {settings_path}')
+    else:
+        typer.echo('no aingram hooks found')
+
+
+app.add_typer(hook_app, name='hook')
 
 
 def main_entry() -> None:
