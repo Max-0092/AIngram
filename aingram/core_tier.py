@@ -14,6 +14,7 @@ this module edits no shared read/write path.
 
 from __future__ import annotations
 
+from aingram.security.roles import RoleAuthorizer
 from aingram.types import MemoryEntry
 
 # A pinned entry is always-in-context, so the bar is deliberately high.
@@ -35,3 +36,35 @@ def can_pin(entry: MemoryEntry, *, current_count: int) -> tuple[bool, str]:
     if current_count >= MAX_PINNED:
         return False, 'pinned set at size cap'
     return True, 'ok'
+
+
+def _require(caller, permission: str) -> None:
+    """Operator gate: raises ``AuthorizationError`` if ``caller`` lacks ``permission``.
+
+    Passes the ``CallerContext`` object (not ``caller.role``) — the authorizer owns
+    the policy lookup and reaches in for the role itself (frozen sf1 RBAC).
+    """
+    RoleAuthorizer().check(caller, permission)
+
+
+def pin(store, entry_id: str, *, caller) -> None:
+    """Admin-only: move an eligible entry into the core tier.
+
+    Propagates ``AuthorizationError`` for a non-admin caller; raises ``ValueError``
+    if the entry is missing or ineligible (``can_pin`` failed). Writes through the
+    frozen ``engine.set_governance`` pinned column — no new write path.
+    """
+    _require(caller, 'pin')
+    entry = store._engine.get_entry(entry_id)
+    if entry is None:
+        raise ValueError('no such entry')
+    ok, reason = can_pin(entry, current_count=len(store._engine.get_pinned_entries()))
+    if not ok:
+        raise ValueError(reason)
+    store._engine.set_governance(entry_id, pinned=1)
+
+
+def unpin(store, entry_id: str, *, caller) -> None:
+    """Admin-only: remove an entry from the core tier (no eligibility check needed)."""
+    _require(caller, 'unpin')
+    store._engine.set_governance(entry_id, pinned=0)
