@@ -1,5 +1,6 @@
 import sqlite3
 
+import pytest
 import sqlite_vec
 
 from aingram.storage.schema import SCHEMA_VERSION, apply_schema, get_schema_version
@@ -63,4 +64,29 @@ def test_migration_is_idempotent(tmp_path):
     apply_schema(c, enable_vec=True)
     apply_schema(c, enable_vec=True)
     assert get_schema_version(c) == 10
+    c.close()
+
+
+def test_status_check_rejects_unknown_value(tmp_path):
+    c = _conn(tmp_path)
+    apply_schema(c, enable_vec=True)
+    c.execute('PRAGMA foreign_keys=OFF')
+    c.execute("INSERT INTO agent_sessions (session_id,agent_name,public_key,created_at) "
+              "VALUES ('s1','t','pk','2026-01-01')")
+    with pytest.raises(sqlite3.IntegrityError):
+        c.execute("INSERT INTO memory_entries (entry_id,content_hash,entry_type,content,"
+                  "session_id,sequence_num,signature,created_at,importance,status) "
+                  "VALUES ('e1','ch','observation','{}','s1',1,'sig','2026-01-01',0.5,'bogus')")
+    c.close()
+
+
+def test_status_defaults_to_pending(tmp_path):
+    c = _conn(tmp_path)
+    apply_schema(c, enable_vec=True)
+    c.execute("INSERT INTO agent_sessions (session_id,agent_name,public_key,created_at) "
+              "VALUES ('s1','t','pk','2026-01-01')")
+    c.execute("INSERT INTO memory_entries (entry_id,content_hash,entry_type,content,session_id,"
+              "sequence_num,signature,created_at,importance) "
+              "VALUES ('e1','ch','observation','{}','s1',1,'sig','2026-01-01',0.5)")
+    assert c.execute("SELECT status FROM memory_entries WHERE entry_id='e1'").fetchone()[0] == 'pending'
     c.close()
