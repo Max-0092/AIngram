@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 
 from aingram.config import AIngramConfig
 from aingram.exceptions import DatabaseError
+from aingram.recall.scoring import compose_recall_score, status_factor
+from aingram.recall.temporal import is_valid_at
 from aingram.storage.engine import StorageEngine
 from aingram.storage.queries import reciprocal_rank_fusion
 from aingram.trust import (
@@ -231,6 +233,9 @@ class MemoryStore:
         entry_id: str | None = None,
         limit: int = 20,
         verify: bool = True,
+        as_of: str | None = None,
+        filters: dict | None = None,
+        trust_aware: bool = True,
     ) -> list[EntrySearchResult]:
         if entry_id is not None:
             entry = self._engine.get_entry(entry_id)
@@ -314,6 +319,10 @@ class MemoryStore:
                 continue
             if session_id and entry.session_id != session_id:
                 continue
+            if not is_valid_at(entry, as_of):
+                continue
+            if status_factor(entry.status) == 0.0:
+                continue
 
             created = datetime.fromisoformat(entry.created_at)
             if created.tzinfo is None:
@@ -324,7 +333,18 @@ class MemoryStore:
             )
             recency = math.exp(-0.001 * hours_ago)
             conf = entry.confidence if entry.confidence is not None else 0.5
-            composite = rrf_score * entry.importance * conf * recency
+            base = rrf_score * entry.importance * conf * recency
+            composite = (
+                compose_recall_score(
+                    base,
+                    trust_score=entry.trust_score,
+                    status=entry.status,
+                    kind=entry.kind,
+                    type_weights=(filters or {}).get("type_weights", {}),
+                )
+                if trust_aware
+                else base
+            )
 
             verified = self._verify_entry(entry, _session_cache=session_cache) if verify else None
             results.append(EntrySearchResult(entry=entry, score=composite, verified=verified))
