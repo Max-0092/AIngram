@@ -959,6 +959,20 @@ class StorageEngine:
             ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def get_pinned_entries(self) -> list[MemoryEntry]:
+        """Read primitive for the core/pinned tier: all entries with pinned=1, trust-desc.
+
+        Generic plumbing over the frozen v10 `pinned` column (same nature as get_entry),
+        so policy layers (sf7 core tier) consume it without editing the entry-read path.
+        """
+        self._check_open()
+        with self._lock:
+            rows = self._conn.execute(
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries WHERE pinned = 1 '
+                'ORDER BY trust_score DESC'
+            ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     def get_entries_by_chain(self, chain_id: str, *, limit: int = 100) -> list[MemoryEntry]:
         self._check_open()
         with self._lock:

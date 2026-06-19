@@ -20,14 +20,14 @@ def _engine(tmp_path):
     return eng
 
 
-def _store(eng, entry_id='e1'):
+def _store(eng, entry_id='e1', seq=1):
     eng.store_entry(
         entry_id=entry_id,
-        content_hash='ch1',
+        content_hash=f'ch-{entry_id}',
         entry_type='observation',
         content='{"text":"hello"}',
         session_id='s1',
-        sequence_num=1,
+        sequence_num=seq,
         prev_entry_id=None,
         signature='sig1',
         created_at='2026-01-01T00:00:00+00:00',
@@ -124,4 +124,29 @@ def test_set_governance_can_pin(tmp_path):
     assert eng.get_entry('e1').pinned == 1
     eng.set_governance('e1', pinned=0)
     assert eng.get_entry('e1').pinned == 0
+    eng.close()
+
+
+def test_get_pinned_entries_returns_only_pinned_trust_desc(tmp_path):
+    # Read primitive for the core/pinned tier (sf7). It is generic plumbing over the
+    # frozen v10 `pinned` column — same nature as get_entry — so it lives on the base
+    # and the cluster only consumes it (sf7 never edits engine.py).
+    eng = _engine(tmp_path)
+    _store(eng, 'e1', seq=1)
+    _store(eng, 'e2', seq=2)
+    _store(eng, 'e3', seq=3)
+    eng.set_governance('e1', pinned=1, trust_score=0.82)
+    eng.set_governance('e2', pinned=1, trust_score=0.95)
+    # e3 stays unpinned (default pinned=0)
+    pinned = eng.get_pinned_entries()
+    ids = [e.entry_id for e in pinned]
+    assert ids == ['e2', 'e1']            # only pinned, trust-descending
+    assert all(e.pinned == 1 for e in pinned)
+    eng.close()
+
+
+def test_get_pinned_entries_empty_when_none_pinned(tmp_path):
+    eng = _engine(tmp_path)
+    _store(eng)
+    assert eng.get_pinned_entries() == []
     eng.close()
