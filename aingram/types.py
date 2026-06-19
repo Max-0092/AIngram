@@ -128,6 +128,17 @@ class MemoryEntry:
     access_count: int = 0
     surprise: float | None = None
     consolidated: int = 0
+    # v10 governance / trust / bi-temporal columns (Seam B). Defaults mirror the
+    # SQLite schema defaults so a plain write stays quarantine-by-default + unscored.
+    kind: str | None = None
+    source: str | None = None
+    domain: str | None = None
+    scope: str | None = None
+    status: str = 'pending'
+    trust_score: float | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+    pinned: int = 0
 
 
 @dataclass

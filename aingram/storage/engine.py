@@ -45,6 +45,13 @@ _ENTRY_COLUMNS = (
     'tags, metadata, confidence, importance, accessed_at, access_count, surprise, consolidated'
 )
 
+# Writes use _ENTRY_COLUMNS (the v10 governance columns take their schema defaults on INSERT).
+# Reads use _ENTRY_READ_COLUMNS so MemoryEntry surfaces the governance/trust/temporal state.
+_ENTRY_GOVERNANCE_COLUMNS = (
+    'kind, source, domain, scope, status, trust_score, valid_from, valid_to, pinned'
+)
+_ENTRY_READ_COLUMNS = f'{_ENTRY_COLUMNS}, {_ENTRY_GOVERNANCE_COLUMNS}'
+
 _ENTITY_COLUMNS = 'entity_id, name, entity_type, first_seen, last_seen, mention_count'
 
 _VALID_OUTCOMES = frozenset(
@@ -723,6 +730,16 @@ class StorageEngine:
             access_count=row[16] if row[16] is not None else 0,
             surprise=row[17],
             consolidated=row[18] if row[18] is not None else 0,
+            # v10 governance/trust/temporal columns (_ENTRY_GOVERNANCE_COLUMNS order)
+            kind=row[19],
+            source=row[20],
+            domain=row[21],
+            scope=row[22],
+            status=row[23] if row[23] is not None else 'pending',
+            trust_score=row[24],
+            valid_from=row[25],
+            valid_to=row[26],
+            pinned=row[27] if row[27] is not None else 0,
         )
 
     def store_session(self, session: AgentSession) -> None:
@@ -877,7 +894,7 @@ class StorageEngine:
         self._check_open()
         with self._lock:
             row = self._conn.execute(
-                f'SELECT {_ENTRY_COLUMNS} FROM memory_entries WHERE entry_id = ?',
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries WHERE entry_id = ?',
                 (entry_id,),
             ).fetchone()
         if row is None:
@@ -891,7 +908,7 @@ class StorageEngine:
         placeholders = ','.join('?' * len(entry_ids))
         with self._lock:
             rows = self._conn.execute(
-                f'SELECT {_ENTRY_COLUMNS} FROM memory_entries WHERE entry_id IN ({placeholders})',
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries WHERE entry_id IN ({placeholders})',
                 entry_ids,
             ).fetchall()
         return [self._row_to_entry(r) for r in rows]
@@ -900,7 +917,7 @@ class StorageEngine:
         self._check_open()
         with self._lock:
             rows = self._conn.execute(
-                f'SELECT {_ENTRY_COLUMNS} FROM memory_entries '
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries '
                 'WHERE reasoning_chain_id = ? ORDER BY created_at ASC LIMIT ?',
                 (chain_id, limit),
             ).fetchall()
@@ -910,7 +927,7 @@ class StorageEngine:
         self._check_open()
         with self._lock:
             rows = self._conn.execute(
-                f'SELECT {_ENTRY_COLUMNS} FROM memory_entries '
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries '
                 'WHERE session_id = ? ORDER BY sequence_num',
                 (session_id,),
             ).fetchall()
@@ -1653,7 +1670,7 @@ class StorageEngine:
         self._check_open()
         with self._lock:
             cursor = self._conn.execute(
-                f'SELECT {_ENTRY_COLUMNS} FROM memory_entries '
+                f'SELECT {_ENTRY_READ_COLUMNS} FROM memory_entries '
                 'ORDER BY COALESCE(accessed_at, created_at) ASC LIMIT ?',
                 (limit,),
             )
