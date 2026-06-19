@@ -42,7 +42,7 @@ class _StubStore:
                 self.importance = r.importance
                 self.metadata = {'project_path': r.project_path} if r.project_path else None
                 self.trust_score = None
-                self.status = 'active'
+                self.status = 'pending'
 
         class _Wrapped:
             def __init__(self, r: _StubResult):

@@ -87,7 +87,7 @@ class _StubResult:
     importance: float = 0.5
     project_path: str | None = None
     trust_score: float | None = None
-    status: str = 'active'
+    status: str = 'pending'
 
 
 class _StubStore:
