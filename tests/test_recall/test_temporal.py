@@ -20,3 +20,5 @@ def test_as_of_point_in_time():
     assert is_valid_at(e, '2026-03-01T00:00:00+00:00') is True   # inside window
     assert is_valid_at(e, '2026-07-01T00:00:00+00:00') is False  # after valid_to
     assert is_valid_at(e, '2025-12-01T00:00:00+00:00') is False  # before valid_from
+    assert is_valid_at(e, '2026-01-01T00:00:00+00:00') is True   # as_of == valid_from -> inclusive start
+    assert is_valid_at(e, '2026-06-01T00:00:00+00:00') is False  # as_of == valid_to   -> exclusive end
