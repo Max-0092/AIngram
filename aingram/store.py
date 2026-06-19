@@ -116,8 +116,32 @@ class MemoryStore:
         self._qjl_projection = None
 
     def set_extractor(self, extractor) -> None:
-        """Attach an extractor for type inference (optional)."""
+        """Attach an extractor for type inference + graph extraction.
+
+        Resets the cached extraction worker so the next ``drain_extraction``
+        rebuilds it against the new extractor.
+        """
         self._extractor = extractor
+        self._worker = None
+
+    def drain_extraction(self) -> int:
+        """Drain the extraction queue through the configured extractor.
+
+        The production entry point that closes the F13 operational gap: with the
+        capture daemon off, nothing drove ``extract_entities_v3`` tasks, so the
+        graph never kept pace. ``remember`` enqueues those tasks; this drains all
+        pending ones (no daemon required) and returns the number processed. The
+        underlying ``BackgroundWorker.drain`` is reused, never re-implemented.
+        """
+        if self._extractor is None:
+            raise RuntimeError('no extractor configured; call set_extractor() first')
+        worker = getattr(self, '_worker', None)
+        if worker is None:
+            from aingram.worker import BackgroundWorker
+
+            worker = BackgroundWorker(self._engine, extractor=self._extractor)
+            self._worker = worker
+        return worker.drain()
 
     def _get_qjl_projection(self):
         """Lazy-load and cache the QJL projection matrix (seed from db_metadata)."""
