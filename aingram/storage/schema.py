@@ -7,7 +7,7 @@ import sqlite3
 logger = logging.getLogger(__name__)
 
 # Lite v9: QJL 1-bit vec_entries_qjl (replaces int8 path).
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 AGENT_SESSIONS_TABLE = """
 CREATE TABLE IF NOT EXISTS agent_sessions (
@@ -44,6 +44,17 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     access_count       INTEGER NOT NULL DEFAULT 0,
     surprise           REAL,
     consolidated       INTEGER NOT NULL DEFAULT 0,
+    kind               TEXT,
+    source             TEXT,
+    domain             TEXT,
+    scope              TEXT,
+    status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN (
+        'pending','approved','denied'
+    )),
+    trust_score        REAL,
+    valid_from         TEXT,
+    valid_to           TEXT,
+    pinned             INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (session_id) REFERENCES agent_sessions(session_id),
     FOREIGN KEY (reasoning_chain_id) REFERENCES reasoning_chains(chain_id),
     FOREIGN KEY (parent_entry_id) REFERENCES memory_entries(entry_id),
@@ -304,6 +315,27 @@ def _migrate_v8_to_v9(conn: sqlite3.Connection, vec_embedding_dim: int) -> None:
     )
 
 
+def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
+    """v9->v10: add governance, trust, bi-temporal, and pin columns to memory_entries."""
+    alterations = [
+        'ALTER TABLE memory_entries ADD COLUMN kind TEXT',
+        'ALTER TABLE memory_entries ADD COLUMN source TEXT',
+        'ALTER TABLE memory_entries ADD COLUMN domain TEXT',
+        'ALTER TABLE memory_entries ADD COLUMN scope TEXT',
+        "ALTER TABLE memory_entries ADD COLUMN status TEXT NOT NULL DEFAULT 'pending' "
+        "CHECK (status IN ('pending','approved','denied'))",
+        'ALTER TABLE memory_entries ADD COLUMN trust_score REAL',
+        'ALTER TABLE memory_entries ADD COLUMN valid_from TEXT',
+        'ALTER TABLE memory_entries ADD COLUMN valid_to TEXT',
+        'ALTER TABLE memory_entries ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0',
+    ]
+    for sql in alterations:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # column already exists — idempotent
+
+
 def get_schema_version(conn: sqlite3.Connection) -> int | None:
     """Read schema version from db_metadata (v3) or meta (v2 fallback)."""
     try:
@@ -369,6 +401,9 @@ def apply_schema(
 
     if version is not None and version < 9:
         _migrate_v8_to_v9(conn, vec_embedding_dim)
+
+    if version is not None and version < 10:
+        _migrate_v9_to_v10(conn)
 
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ki_due ON knowledge_items(due_at, fsrs_state)')
 
