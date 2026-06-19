@@ -331,6 +331,16 @@ class MemoryStore:
             if status_factor(entry.status) == 0.0:
                 continue
 
+            # Governance facet filter: skip entries that don't match any provided facet value.
+            # A filter value of None means "don't filter on this facet" (is not None guard).
+            # type_weights is a scoring hint, not a facet — excluded from iteration.
+            _facets = filters or {}
+            if any(
+                _facets.get(f) is not None and getattr(entry, f) != _facets[f]
+                for f in ('source', 'kind', 'domain', 'scope')
+            ):
+                continue
+
             created = datetime.fromisoformat(entry.created_at)
             if created.tzinfo is None:
                 created = created.replace(tzinfo=UTC)
