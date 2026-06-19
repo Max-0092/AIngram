@@ -241,11 +241,18 @@ class MemoryStore:
             entry = self._engine.get_entry(entry_id)
             if entry is None:
                 return []
+            if not is_valid_at(entry, as_of):
+                return []
+            if status_factor(entry.status) == 0.0:
+                return []
             verified = self._verify_entry(entry) if verify else None
             return [EntrySearchResult(entry=entry, score=1.0, verified=verified)]
 
         if chain_id is not None and query is None:
-            entries = self._engine.get_entries_by_chain(chain_id, limit=limit)
+            entries = [
+                e for e in self._engine.get_entries_by_chain(chain_id, limit=limit)
+                if is_valid_at(e, as_of) and status_factor(e.status) != 0.0
+            ]
             return [
                 EntrySearchResult(
                     entry=e,

@@ -69,9 +69,84 @@ def test_denied_entry_is_withheld(store_with_entries):
 def test_as_of_returns_historical_set(store_with_entries):
     """as_of= a past timestamp must include entries that were valid then."""
     store, ids = store_with_entries
-    # 2026-02-01 is after valid_from=2025-01-01 and before valid_to=2026-01-01 — wait no:
-    # valid_to=2026-01-01, and 2026-02-01 > 2026-01-01 so it's expired by then.
     # Use 2025-06-01 which is within [2025-01-01, 2026-01-01).
     results = store.recall("topic", as_of="2025-06-01T00:00:00+00:00", limit=10)
     got = {r.entry.entry_id for r in results}
     assert ids["old"] in got  # was valid at 2025-06-01
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: fast-path quarantine bypass (entry_id and chain_id paths)
+# ---------------------------------------------------------------------------
+
+def test_recall_by_entry_id_withholds_denied(tmp_path):
+    """recall(entry_id=x) must not return a denied entry — the fast path must honor status gate."""
+    from aingram.store import MemoryStore
+
+    db = tmp_path / "fastpath_denied.db"
+    store = MemoryStore(
+        str(db),
+        agent_name="test-agent",
+        embedder=MockEmbedder(),
+        config=AIngramConfig(),
+    )
+    try:
+        eid = store.remember("secret denied content")
+        store._engine.set_governance(eid, status="denied")
+        results = store.recall(entry_id=eid)
+        assert results == [], f"Expected [], got {results}"
+    finally:
+        store.close()
+
+
+def test_recall_by_entry_id_excludes_invalidated_by_default(tmp_path):
+    """recall(entry_id=x) must exclude temporally-invalidated entries by default."""
+    from aingram.store import MemoryStore
+
+    db = tmp_path / "fastpath_temporal.db"
+    store = MemoryStore(
+        str(db),
+        agent_name="test-agent",
+        embedder=MockEmbedder(),
+        config=AIngramConfig(),
+    )
+    try:
+        eid = store.remember("once-valid content")
+        # Set valid window entirely in the past
+        store._engine.set_governance(
+            eid,
+            valid_from="2025-01-01T00:00:00+00:00",
+            valid_to="2026-01-01T00:00:00+00:00",
+        )
+        # Default (as_of=None = now, 2026-06-19): entry is expired → must be excluded
+        results = store.recall(entry_id=eid)
+        assert results == [], f"Expected [] for expired entry, got {results}"
+        # But as_of inside the valid window must return it
+        results_historical = store.recall(entry_id=eid, as_of="2025-06-01T00:00:00+00:00")
+        assert len(results_historical) == 1, "Expected entry when querying inside its valid window"
+    finally:
+        store.close()
+
+
+def test_recall_by_chain_withholds_denied(tmp_path):
+    """recall(chain_id=x, query=None) must not return denied entries — chain fast path must honor status gate."""
+    from aingram.store import MemoryStore
+
+    db = tmp_path / "fastpath_chain.db"
+    store = MemoryStore(
+        str(db),
+        agent_name="test-agent",
+        embedder=MockEmbedder(),
+        config=AIngramConfig(),
+    )
+    try:
+        chain_id = store.create_chain("test chain")
+        good_id = store.remember("good entry in chain", chain_id=chain_id)
+        bad_id = store.remember("denied entry in chain", chain_id=chain_id)
+        store._engine.set_governance(bad_id, status="denied")
+        results = store.recall(chain_id=chain_id)
+        ids_returned = {r.entry.entry_id for r in results}
+        assert good_id in ids_returned, "Good entry must be returned"
+        assert bad_id not in ids_returned, "Denied entry must be withheld from chain fast path"
+    finally:
+        store.close()
