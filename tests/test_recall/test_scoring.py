@@ -3,7 +3,8 @@ from aingram.recall.scoring import (trust_factor, status_factor, mem_type_factor
 def test_trust_factor_null_is_neutral():
     assert trust_factor(None) == 0.5
     assert trust_factor(0.9) == 0.9
-    assert trust_factor(1.5) == 1.0   # clamp
+    assert trust_factor(1.5) == 1.0   # upper clamp
+    assert trust_factor(-0.2) == 0.0   # lower clamp
 
 def test_status_factor_quarantine_ordering():
     assert status_factor('approved') == 1.0
@@ -14,6 +15,7 @@ def test_mem_type_factor_derives_from_kind():
     w = {'semantic': 1.0, 'procedural': 2.0, 'episodic': 0.5}
     assert mem_type_factor('instruction', w) == 2.0   # instruction -> procedural
     assert mem_type_factor('outcome', w) == 0.5       # outcome -> episodic
+    assert mem_type_factor('fact', w) == 1.0          # fact -> semantic
     assert mem_type_factor(None, w) == 1.0            # unknown -> neutral
 
 def test_compose_multiplies_and_denied_is_zero():

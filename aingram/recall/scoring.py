@@ -18,7 +18,8 @@ def mem_type_factor(kind: str | None, weights: dict[str, float]) -> float:
         return 1.0
     return weights.get(mem_type, 1.0)
 
-def compose_recall_score(base_score: float, *, trust_score, status, kind, type_weights) -> float:
+def compose_recall_score(base_score: float, *, trust_score: float | None, status: str,
+                         kind: str | None, type_weights: dict[str, float]) -> float:
     return (base_score
             * trust_factor(trust_score)
             * status_factor(status)
