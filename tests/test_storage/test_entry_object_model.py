@@ -88,3 +88,40 @@ def test_get_entries_by_ids_also_exposes_governance(tmp_path):
     assert rows[0].trust_score == 0.5
     assert rows[0].status == 'approved'
     eng.close()
+
+
+def test_set_governance_writes_only_provided_fields(tmp_path):
+    # The write-twin of the read path: policy layers (sf4 capture, sf7 pin, sf6 consolidation)
+    # set governance columns through one parameterized mechanism. None = leave untouched.
+    eng = _engine(tmp_path)
+    _store(eng)
+    eng.set_governance('e1', source='codex', kind='fact', trust_score=0.9, status='approved')
+    entry = eng.get_entry('e1')
+    assert entry.source == 'codex'
+    assert entry.kind == 'fact'
+    assert entry.trust_score == 0.9
+    assert entry.status == 'approved'
+    # Unprovided fields keep their defaults (not clobbered to NULL).
+    assert entry.pinned == 0
+    assert entry.domain is None
+    eng.close()
+
+
+def test_set_governance_no_fields_is_a_noop(tmp_path):
+    eng = _engine(tmp_path)
+    _store(eng)
+    eng.set_governance('e1')  # nothing provided
+    entry = eng.get_entry('e1')
+    assert entry.status == 'pending'
+    assert entry.trust_score is None
+    eng.close()
+
+
+def test_set_governance_can_pin(tmp_path):
+    eng = _engine(tmp_path)
+    _store(eng)
+    eng.set_governance('e1', pinned=1)
+    assert eng.get_entry('e1').pinned == 1
+    eng.set_governance('e1', pinned=0)
+    assert eng.get_entry('e1').pinned == 0
+    eng.close()

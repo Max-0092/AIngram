@@ -742,6 +742,52 @@ class StorageEngine:
             pinned=row[27] if row[27] is not None else 0,
         )
 
+    def set_governance(
+        self,
+        entry_id: str,
+        *,
+        kind: str | None = None,
+        source: str | None = None,
+        domain: str | None = None,
+        scope: str | None = None,
+        status: str | None = None,
+        trust_score: float | None = None,
+        valid_from: str | None = None,
+        valid_to: str | None = None,
+        pinned: int | None = None,
+    ) -> None:
+        """Set v10 governance/trust/temporal columns on an entry (parameterized UPDATE).
+
+        Mechanism only — only non-None fields are written, so each policy layer touches
+        exactly the columns it owns and never clobbers another's value. Policy (what status,
+        what trust score, supersession timing, pin eligibility) lives in the governance /
+        capture / core-tier layers (sf4/sf6/sf7), not here. Column names come from a fixed
+        internal map (never caller input), so the dynamic SET clause is injection-safe.
+        """
+        candidates = {
+            'kind': kind,
+            'source': source,
+            'domain': domain,
+            'scope': scope,
+            'status': status,
+            'trust_score': trust_score,
+            'valid_from': valid_from,
+            'valid_to': valid_to,
+            'pinned': pinned,
+        }
+        provided = {col: val for col, val in candidates.items() if val is not None}
+        if not provided:
+            return
+        set_clause = ', '.join(f'{col} = ?' for col in provided)
+        params = [*provided.values(), entry_id]
+        self._check_open()
+        with self._lock:
+            self._conn.execute(
+                f'UPDATE memory_entries SET {set_clause} WHERE entry_id = ?',
+                params,
+            )
+            self._conn.commit()
+
     def store_session(self, session: AgentSession) -> None:
         self._check_open()
         with self._lock:
