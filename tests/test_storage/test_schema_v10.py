@@ -90,3 +90,15 @@ def test_status_defaults_to_pending(tmp_path):
               "VALUES ('e1','ch','observation','{}','s1',1,'sig','2026-01-01',0.5)")
     assert c.execute("SELECT status FROM memory_entries WHERE entry_id='e1'").fetchone()[0] == 'pending'
     c.close()
+
+
+def test_v10_indexes_exist(tmp_path):
+    c = _conn(tmp_path)
+    apply_schema(c, enable_vec=True)
+    names = {r[0] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")}
+    for idx in ['idx_entries_status', 'idx_entries_trust_score', 'idx_entries_kind',
+                'idx_entries_source', 'idx_entries_domain', 'idx_entries_valid_to',
+                'idx_entries_pinned']:
+        assert idx in names, f'missing {idx}'
+    c.close()

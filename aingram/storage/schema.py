@@ -406,6 +406,15 @@ def apply_schema(
         _migrate_v9_to_v10(conn)
 
     conn.execute('CREATE INDEX IF NOT EXISTS idx_ki_due ON knowledge_items(due_at, fsrs_state)')
+    # v10 governance/trust/temporal indexes — created AFTER the migration block (not in the global
+    # INDEXES list, which runs before migrations) so the columns exist on a v9->v10 upgrade.
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_status ON memory_entries(status)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_trust_score ON memory_entries(trust_score)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_kind ON memory_entries(kind)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_source ON memory_entries(source)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_domain ON memory_entries(domain)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_valid_to ON memory_entries(valid_to)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_entries_pinned ON memory_entries(pinned)')
 
     now = datetime.now(UTC).isoformat()
     conn.execute(
