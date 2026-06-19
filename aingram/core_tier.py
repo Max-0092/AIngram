@@ -14,6 +14,8 @@ this module edits no shared read/write path.
 
 from __future__ import annotations
 
+import json
+
 from aingram.security.roles import RoleAuthorizer
 from aingram.types import MemoryEntry
 
@@ -68,3 +70,48 @@ def unpin(store, entry_id: str, *, caller) -> None:
     """Admin-only: remove an entry from the core tier (no eligibility check needed)."""
     _require(caller, 'unpin')
     store._engine.set_governance(entry_id, pinned=0)
+
+
+def _decoded_text(entry: MemoryEntry) -> str:
+    """The human-readable text from an entry's canonical-JSON content (falls back
+    to the raw string for non-text payloads). Mirrors store.py's decode pattern."""
+    try:
+        parsed = json.loads(entry.content)
+    except (ValueError, TypeError):
+        return entry.content
+    if isinstance(parsed, dict) and 'text' in parsed:
+        return parsed['text']
+    return entry.content
+
+
+# Rough chars-per-token; core memory is a small budget, not an exact tokenizer.
+_CHARS_PER_TOKEN = 4
+
+
+def core_memory(store, *, max_tokens: int = 1000) -> list[dict]:
+    """The always-in-context tier: spotlight-wrapped pinned entries for every-session
+    injection, regardless of query.
+
+    Reads the pinned set via the frozen ``engine.get_pinned_entries`` (already trust-desc),
+    wraps each as a ``role:'data'`` envelope (spotlighting — framed as reference data, not
+    instructions), and stops once the rough token budget is spent. Envelope shape is kept
+    identical to sf3's recall-egress spotlight so sf8 can expose one consistent format.
+    """
+    budget = max_tokens * _CHARS_PER_TOKEN
+    items: list[dict] = []
+    for entry in store._engine.get_pinned_entries():
+        text = _decoded_text(entry)
+        budget -= len(text)
+        if budget < 0 and items:
+            break
+        items.append(
+            {
+                'entry_id': entry.entry_id,
+                'content': text,
+                'source': entry.source,
+                'status': entry.status,
+                'trust_score': entry.trust_score,
+                'role': 'data',
+            }
+        )
+    return items

@@ -119,6 +119,17 @@ class MemoryStore:
         """Attach an extractor for type inference (optional)."""
         self._extractor = extractor
 
+    def core_memory(self, *, max_tokens: int = 1000) -> list[dict]:
+        """The always-in-context core tier (pinned, spotlighted, budgeted).
+
+        Thin delegation to ``core_tier.core_memory`` — sf8 wires this store hook into
+        the live recall daemon. Distinct from query-driven ``recall``: core = RAM
+        (every session), recall = archival/disk (on query).
+        """
+        from aingram.core_tier import core_memory
+
+        return core_memory(self, max_tokens=max_tokens)
+
     def _get_qjl_projection(self):
         """Lazy-load and cache the QJL projection matrix (seed from db_metadata)."""
         if self._qjl_projection is None:
