@@ -239,6 +239,9 @@ class RecallDaemon:
                 'project_path': (r.entry.metadata or {}).get('project_path')
                 if r.entry.metadata
                 else None,
+                'trust_score': r.entry.trust_score,
+                'status': r.entry.status,
+                'role': 'data',
             }
             for r in raw_results
         ]
