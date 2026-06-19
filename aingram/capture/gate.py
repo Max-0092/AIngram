@@ -34,10 +34,13 @@ def evaluate_capture(text: str, *, source: str, caller=None) -> GateDecision:
     ``pending`` for a ``None`` caller (autonomous) — only an authenticated
     ADMIN caller could be approved, and the capture path never supplies one.
     """
+    # Enforces CaptureConfig.secret_block unconditionally: a hit blocks the write
+    # (status 'denied' here is informational — a blocked record is never stored).
     hits = scan_for_secrets(text)
     if hits:
         return GateDecision(False, 'denied', 0.0, source, f'secret pattern(s): {len(hits)}')
     signals = TrustSignals(source_trust=0.5, provenance_valid=True, secret_hits=0, anomaly_score=0.0)
     score = compute_trust_score(signals)
+    # Enforces CaptureConfig.quarantine_default: autonomous (caller=None) -> 'pending'.
     status = default_status_for_caller(caller)   # None caller -> 'pending' (fails closed)
     return GateDecision(True, status, score, source, 'ok')
