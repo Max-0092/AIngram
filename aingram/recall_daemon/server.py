@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
 from aingram.recall_daemon.ranking import apply_ranking
+from aingram.security.bounds import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -254,5 +255,7 @@ class RecallDaemon:
             score_threshold=score_threshold,
             limit=limit,
         )
+        for _d in ranked:
+            _d['content'] = sanitize_for_prompt(_d['content'])
         daemon_ms = round((time.time() - t0) * 1000, 1)
         self._write_json(handler, 200, {'results': ranked, 'daemon_ms': daemon_ms})
