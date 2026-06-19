@@ -8,6 +8,12 @@ sf2 stores them, sf3/sf4 populate and read them, sf7 governs against them.
 from __future__ import annotations
 
 from aingram.governance.quarantine import default_status_for_caller
+from aingram.governance.secrets import scan_for_secrets
 from aingram.governance.trust import TrustSignals, compute_trust_score
 
-__all__ = ['TrustSignals', 'compute_trust_score', 'default_status_for_caller']
+__all__ = [
+    'TrustSignals',
+    'compute_trust_score',
+    'default_status_for_caller',
+    'scan_for_secrets',
+]
