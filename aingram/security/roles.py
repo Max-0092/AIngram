@@ -29,6 +29,11 @@ PERMISSIONS: dict[str, set[Role]] = {
     'review_memory': {Role.CONTRIBUTOR, Role.ADMIN},
     'get_due_reviews': {Role.READER, Role.CONTRIBUTOR, Role.ADMIN},
     'get_surprise': {Role.READER, Role.CONTRIBUTOR, Role.ADMIN},
+    # Memory v2 governance ops — admin-only (operator gate over the quarantine queue).
+    'approve': {Role.ADMIN},
+    'deny': {Role.ADMIN},
+    'pin': {Role.ADMIN},
+    'unpin': {Role.ADMIN},
 }
 
 
