@@ -5,6 +5,7 @@ import logging
 import threading
 
 from aingram.capture.config import CaptureConfig
+from aingram.capture.gate import evaluate_capture
 from aingram.capture.queue import CaptureQueue
 from aingram.capture.types import CaptureRecord
 
@@ -112,9 +113,21 @@ class CaptureDrain:
             try:
                 store = self._get_store()
                 content = self._format_for_remember(record)
+                decision = evaluate_capture(content, source=record.source_tool)
+                if not decision.allow:
+                    # Secret-bearing capture: blocked, never stored, not counted.
+                    self._queue.mark_error(row_id, decision.reason)
+                    continue
                 metadata = self._build_metadata(record)
                 tags = ['captured', record.source_tool]
-                store.remember(content, metadata=metadata, tags=tags)
+                entry_id = store.remember(content, metadata=metadata, tags=tags)
+                # Stamp governance: provenance + quarantine status + baseline trust.
+                store._engine.set_governance(
+                    entry_id,
+                    source=decision.source,
+                    status=decision.status,
+                    trust_score=decision.trust_score,
+                )
                 self._queue.mark_done(row_id)
                 self._records_since_consolidation += 1
             except Exception as e:
