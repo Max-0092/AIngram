@@ -102,3 +102,28 @@ def test_v10_indexes_exist(tmp_path):
                 'idx_entries_pinned']:
         assert idx in names, f'missing {idx}'
     c.close()
+
+
+def _insert(c, entry_id, valid_from, valid_to):
+    c.execute("INSERT INTO memory_entries (entry_id,content_hash,entry_type,content,session_id,"
+              "sequence_num,signature,created_at,importance,status,valid_from,valid_to) "
+              "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+              (entry_id, 'ch', 'observation', '{}', 's1', int(entry_id[1:]), 'sig', '2026-01-01',
+               0.5, 'approved', valid_from, valid_to))
+
+
+def test_valid_now_excludes_superseded(tmp_path):
+    c = _conn(tmp_path)
+    apply_schema(c, enable_vec=True)
+    c.execute("INSERT INTO agent_sessions (session_id,agent_name,public_key,created_at) "
+              "VALUES ('s1','t','pk','2026-01-01')")
+    _insert(c, 'e1', '2026-01-01', '2026-03-01')   # superseded on Mar 1
+    _insert(c, 'e2', '2026-03-01', None)           # current
+    now = {r[0] for r in c.execute("SELECT entry_id FROM memory_entries WHERE valid_to IS NULL")}
+    assert now == {'e2'}
+    # "as of" 2026-02-01: e1 was valid, e2 not yet
+    as_of = {r[0] for r in c.execute(
+        "SELECT entry_id FROM memory_entries WHERE valid_from <= ? "
+        "AND (valid_to IS NULL OR valid_to > ?)", ('2026-02-01', '2026-02-01'))}
+    assert as_of == {'e1'}
+    c.close()
