@@ -44,3 +44,17 @@ def test_store_drain_extraction_populates_graph_without_a_daemon(tmp_path):
     names = {e['name'] if isinstance(e, dict) else e.name for e in ents}
     assert any('RunPod' in n or 'LTX' in n for n in names)
     store.close()
+
+
+def test_sonnet_extractor_exposes_extract_full_for_worker_dispatch():
+    # Regression (final review): the worker dispatches graph extraction on
+    # hasattr(extractor, 'extract_full'). SonnetExtractor.extract already returns
+    # a full ExtractionResult, so without extract_full, store.drain_extraction()
+    # silently extracts nothing for extractor_mode='sonnet' — the two-arg fallback
+    # extract(text, labels) raises TypeError on its single-arg extract.
+    from aingram.extraction.sonnet import SonnetExtractor
+
+    s = SonnetExtractor(client=object())          # no API key / network needed
+    s.extract = lambda text: 'SENTINEL'           # type: ignore[assignment,method-assign]
+    assert hasattr(s, 'extract_full')
+    assert s.extract_full('anything') == 'SENTINEL'   # delegates to extract

@@ -127,6 +127,17 @@ class SonnetExtractor:
 
         return self._parse_response(response)
 
+    def extract_full(self, text: str) -> ExtractionResult:
+        """Full extraction (entities + relationships) under the name the
+        BackgroundWorker dispatches on (``hasattr(extractor, 'extract_full')``).
+
+        ``extract`` already returns a complete ExtractionResult, so this just
+        exposes it. Without this, the worker falls through to the two-arg
+        ``extract(text, labels)`` path, which raises TypeError on this single-arg
+        extractor and silently drains nothing for ``extractor_mode='sonnet'``.
+        """
+        return self.extract(text)
+
     def _parse_response(self, response: Any) -> ExtractionResult:
         """Parse Anthropic response into ExtractionResult."""
         for block in response.content:
