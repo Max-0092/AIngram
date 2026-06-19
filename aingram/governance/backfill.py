@@ -23,7 +23,9 @@ def backfill_governance_columns(conn: sqlite3.Connection) -> int:
 
     Idempotent. The existing corpus is operator-curated, so rows are defaulted to approved.
     Uses COALESCE so a non-NULL governance value (e.g. a consolidation re-score) is never
-    clobbered with NULL on a re-run.
+    clobbered with NULL on a re-run. Only touches rows still ``status='pending'`` so a re-run
+    after governance is live can never revive a denied/approved decision (at cutover every
+    migrated row is 'pending', so curation still reaches the whole corpus).
     """
     rows = conn.execute(
         'SELECT entry_id, metadata, created_at FROM memory_entries'
@@ -43,7 +45,7 @@ def backfill_governance_columns(conn: sqlite3.Connection) -> int:
             'domain = COALESCE(?, domain), scope = COALESCE(?, scope), '
             "status = 'approved', trust_score = COALESCE(trust_score, 1.0), "
             'valid_from = COALESCE(valid_from, ?) '
-            'WHERE entry_id = ?',
+            "WHERE entry_id = ? AND status = 'pending'",
             (sets.get('kind'), sets.get('source'), sets.get('domain'), sets.get('scope'),
              created_at, entry_id),
         )

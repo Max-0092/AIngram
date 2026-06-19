@@ -41,3 +41,14 @@ def test_backfill_is_idempotent(tmp_path):
     assert backfill_governance_columns(c) in (0, 1)   # re-run safe, no corruption
     assert c.execute("SELECT status FROM memory_entries WHERE entry_id='e1'").fetchone()[0] == 'approved'
     c.close()
+
+
+def test_backfill_does_not_flip_a_governed_decision(tmp_path):
+    # A post-governance re-run must NOT revive a denied entry to approved.
+    c = _conn(tmp_path)
+    c.execute("INSERT INTO memory_entries (entry_id,content_hash,entry_type,content,session_id,"
+              "sequence_num,signature,created_at,importance,metadata,status) "
+              "VALUES ('e1','ch','observation','{}','s1',1,'sig','2026-01-02',0.5,'{}','denied')")
+    backfill_governance_columns(c)
+    assert c.execute("SELECT status FROM memory_entries WHERE entry_id='e1'").fetchone()[0] == 'denied'
+    c.close()
