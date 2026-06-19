@@ -38,8 +38,8 @@ class TestSchemaLite:
         assert 'causal_nodes' not in tables
         conn.close()
 
-    def test_schema_version_is_9(self):
-        assert SCHEMA_VERSION == 9
+    def test_schema_version_is_10(self):
+        assert SCHEMA_VERSION == 10
 
 
 def test_apply_creates_core_tables(tmp_path):
