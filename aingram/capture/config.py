@@ -56,6 +56,14 @@ class CaptureConfig:
     poll_interval: float = 0.5
     drain_batch_size: int = 10
     consolidation_interval_records: int = 50  # 0 = disabled
+    # Governance knobs (declared surface). Today the capture gate enforces both
+    # UNCONDITIONALLY: every autonomous capture is quarantine-by-default (pending)
+    # and a secret hit blocks the write. A False value is reserved for a future
+    # explicitly-trusted-source path and must NEVER weaken the autonomous lane —
+    # it can neither auto-approve an autonomous write nor store a secret in the
+    # clear. They live here so that path has a config home when it lands.
+    quarantine_default: bool = True
+    secret_block: bool = True
     redaction_patterns: list[str] = field(default_factory=_default_redaction_patterns)
     tools: dict[str, ToolConfig] = field(default_factory=_default_tool_configs)
 
