@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
 from aingram.recall_daemon.ranking import apply_ranking
+from aingram.security.bounds import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,9 @@ class RecallDaemon:
                 'project_path': (r.entry.metadata or {}).get('project_path')
                 if r.entry.metadata
                 else None,
+                'trust_score': r.entry.trust_score,
+                'status': r.entry.status,
+                'role': 'data',
             }
             for r in raw_results
         ]
@@ -251,5 +255,11 @@ class RecallDaemon:
             score_threshold=score_threshold,
             limit=limit,
         )
+        for _d in ranked:
+            # Sanitize every agent-influenceable field at egress. Ranking has already
+            # consumed project_path (apply_ranking above), so mutating it here is safe.
+            _d['content'] = sanitize_for_prompt(_d['content'])
+            if _d.get('project_path'):
+                _d['project_path'] = sanitize_for_prompt(_d['project_path'])
         daemon_ms = round((time.time() - t0) * 1000, 1)
         self._write_json(handler, 200, {'results': ranked, 'daemon_ms': daemon_ms})
