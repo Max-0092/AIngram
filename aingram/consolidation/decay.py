@@ -24,18 +24,38 @@ def compute_stability(access_count: int, importance: float) -> float:
     return _BASE_STABILITY * repetition_factor * importance_factor
 
 
+def _security_factor(trust_score: float | None, status: str | None) -> float:
+    """Decay multiplier in (0, 1]: denied and low-trust entries sink faster.
+
+    ``denied`` → 0.5 (hardest, regardless of trust). An *unscored* entry
+    (``trust_score is None``) → 1.0: no signal, no acceleration — this preserves the
+    pre-sf6 Ebbinghaus baseline for entries that were never trust-scored. Otherwise a
+    scored entry maps to ``0.5 + 0.5 * trust_score`` (≈1.0 for high trust, ~0.5 for low).
+    """
+    if status == 'denied':
+        return 0.5
+    if trust_score is None:
+        return 1.0
+    return 0.5 + 0.5 * trust_score
+
+
 def compute_decay(
     importance: float,
     hours_since_access: float,
     access_count: int,
+    *,
+    trust_score: float | None = None,
+    status: str | None = None,
 ) -> float:
-    """Apply Ebbinghaus forgetting curve to an importance score."""
+    """Apply the Ebbinghaus forgetting curve to an importance score, then a
+    trust/status security factor (denied/low-trust deprioritize faster)."""
     hours = max(hours_since_access, 0)
     if hours == 0:
         return importance
     stability = compute_stability(access_count, importance)
     retention = math.exp(-hours / stability)
-    return max(MINIMUM_IMPORTANCE, importance * retention)
+    security = _security_factor(trust_score, status)
+    return max(MINIMUM_IMPORTANCE, importance * retention * security)
 
 
 def apply_decay(engine: StorageEngine, *, limit: int = 5000) -> int:
@@ -56,6 +76,8 @@ def apply_decay(engine: StorageEngine, *, limit: int = 5000) -> int:
             importance=entry.importance,
             hours_since_access=age_hours,
             access_count=entry.access_count,
+            trust_score=entry.trust_score,
+            status=entry.status,
         )
 
         if abs(new_importance - entry.importance) > _DECAY_THRESHOLD:
