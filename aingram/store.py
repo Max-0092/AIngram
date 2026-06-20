@@ -405,14 +405,31 @@ class MemoryStore:
         return results[:limit]
 
     def get_context(self, query: str, *, max_tokens: int = 2000) -> str:
-        results = self.recall(query, limit=20, verify=False)
+        """Assemble prompt context: the always-in-context pinned core tier first,
+        then query-driven recall (archival), with every fragment passed through
+        ``sanitize_for_prompt`` exactly once at this in-process egress (sf3/sf7
+        carry-over). Distinct from the recall daemon's HTTP egress — this is the
+        in-process consumer, so it sanitizes here, once, with no double-wrap.
+
+        Fragments are *decoded* before sanitizing: stored content is canonical
+        JSON (``{"text": …}``) whose embedded newlines are escaped, so the
+        line-anchored sanitizer (``security/bounds.py``) cannot strip an injection
+        out of a single JSON line. core_memory already yields decoded text;
+        recall entries are decoded via ``_decoded_text`` to match.
+        """
+        from aingram.core_tier import _decoded_text
+        from aingram.security.bounds import sanitize_for_prompt
+
         budget = max_tokens
         parts: list[str] = []
-        for r in results:
-            tokens = len(r.entry.content) // 4
-            if tokens > budget:
+        core = [item['content'] for item in self.core_memory(max_tokens=max_tokens)]
+        recalled = [_decoded_text(r.entry) for r in self.recall(query, limit=20, verify=False)]
+        for raw in (*core, *recalled):
+            wrapped = sanitize_for_prompt(raw)  # exactly once; in-process egress
+            tokens = len(wrapped) // 4
+            if tokens > budget and parts:
                 break
-            parts.append(r.entry.content)
+            parts.append(wrapped)
             budget -= tokens
         return '\n\n'.join(parts)
 
