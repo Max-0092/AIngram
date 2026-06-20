@@ -266,3 +266,39 @@ def test_served_content_is_sanitized(injection_daemon: RecallDaemon) -> None:
     assert results[0].get('role') == 'data'
     assert results[0].get('trust_score') == 0.8
     assert results[0].get('status') == 'pending'
+
+
+@pytest.fixture
+def injection_project_path_daemon():
+    # project_path comes from agent-influenceable metadata — it must be sanitized at
+    # the same egress point as content, or an injection rides in through the path field.
+    store = _StubStore(
+        [
+            _StubResult(
+                'injp',
+                0.9,
+                'benign content',
+                trust_score=0.8,
+                status='pending',
+                project_path=_INJECTION_LINE,
+            ),
+        ]
+    )
+    d = RecallDaemon(store=store, host='127.0.0.1', port=0, idle_shutdown_seconds=60)
+    d.start()
+    yield d
+    d.stop()
+
+
+def test_served_project_path_is_sanitized(injection_project_path_daemon: RecallDaemon) -> None:
+    """A malicious metadata project_path must be neutralized at egress (same pass as content)."""
+    status, body = _post(
+        f'{injection_project_path_daemon.base_url}/recall',
+        {
+            'query': 'recall test', 'limit': 1, 'score_threshold': 0.0, 'cwd': None,
+            'seen_entry_ids': [], 'project_boost': 0.0, 'seen_demote': 0.0,
+        },
+    )
+    assert status == 200
+    pp = body['results'][0]['project_path']
+    assert _INJECTION_LINE not in pp, f'injection must be stripped from project_path, got: {pp!r}'

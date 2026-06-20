@@ -128,6 +128,32 @@ def test_recall_by_entry_id_excludes_invalidated_by_default(tmp_path):
         store.close()
 
 
+def test_recall_by_entry_id_excludes_future_dated_by_default(tmp_path):
+    """recall(entry_id=x) must exclude a not-yet-effective (future valid_from) entry
+    by default — the fast path must fail closed, not leak scheduled-future entries."""
+    from aingram.store import MemoryStore
+
+    db = tmp_path / "fastpath_future.db"
+    store = MemoryStore(
+        str(db),
+        agent_name="test-agent",
+        embedder=MockEmbedder(),
+        config=AIngramConfig(),
+    )
+    try:
+        eid = store.remember("scheduled-future content")
+        # valid_from in the far future, not yet invalidated (valid_to=NULL)
+        store._engine.set_governance(eid, valid_from="2099-01-01T00:00:00+00:00")
+        # Default (as_of=None = now): entry is not yet effective → must be excluded
+        results = store.recall(entry_id=eid)
+        assert results == [], f"Expected [] for future-dated entry, got {results}"
+        # But as_of after it becomes effective must return it
+        later = store.recall(entry_id=eid, as_of="2099-06-01T00:00:00+00:00")
+        assert len(later) == 1, "Expected entry when querying after its valid_from"
+    finally:
+        store.close()
+
+
 def test_recall_by_chain_withholds_denied(tmp_path):
     """recall(chain_id=x, query=None) must not return denied entries — chain fast path must honor status gate."""
     from aingram.store import MemoryStore
