@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from itertools import combinations
 
 from aingram.processing.protocols import ContradictionClassifier, LLMProcessor
@@ -128,6 +129,12 @@ class ContradictionDetector:
             found += 1
             updates.append(
                 (superseded.entry_id, superseded.importance * _SUPERSEDED_IMPORTANCE_FACTOR)
+            )
+            # Bi-temporal invalidation (Seam F→B): stamp when the superseded fact stopped
+            # being true, so sf3's is_valid_at excludes it from "recall now" while
+            # as_of=<past> still returns it. Supersession sets valid_to, never a flag.
+            self._engine.set_governance(
+                superseded.entry_id, valid_to=datetime.now(UTC).isoformat()
             )
             resolved += 1
 
