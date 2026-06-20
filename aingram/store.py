@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 from aingram.config import AIngramConfig
 from aingram.exceptions import DatabaseError
-from aingram.recall.scoring import compose_recall_score, status_factor
+from aingram.recall.scoring import _KIND_TO_TYPE, compose_recall_score, status_factor
 from aingram.recall.temporal import is_valid_at
 from aingram.storage.engine import StorageEngine
 from aingram.storage.queries import reciprocal_rank_fusion
@@ -60,6 +60,10 @@ _VALID_REFERENCE_TYPES = frozenset(
         'supersedes',
     }
 )
+
+# Seam C mem_type filter → kind, reversing the canonical recall taxonomy map (single
+# source of truth). mem_type is a read-time lens, never a stored column (schema-freeze).
+_MEM_TYPE_TO_KIND = {mem_type: kind for kind, mem_type in _KIND_TO_TYPE.items()}
 
 
 class MemoryStore:
@@ -372,8 +376,12 @@ class MemoryStore:
             _facets = filters or {}
             if any(
                 _facets.get(f) is not None and getattr(entry, f) != _facets[f]
-                for f in ('source', 'kind', 'domain', 'scope')
+                for f in ('source', 'kind', 'domain', 'scope', 'status')
             ):
+                continue
+            # mem_type is a read-time lens over kind (semantic→fact, …), not a column.
+            _mt = _facets.get('mem_type')
+            if _mt is not None and entry.kind != _MEM_TYPE_TO_KIND.get(_mt, _mt):
                 continue
 
             created = datetime.fromisoformat(entry.created_at)
