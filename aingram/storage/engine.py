@@ -64,6 +64,9 @@ _VALID_OUTCOMES = frozenset(
     }
 )
 
+# The frozen sf1 approval-lifecycle enum (mirrors the schema CHECK on memory_entries.status).
+_VALID_STATUS = frozenset({'pending', 'approved', 'denied'})
+
 
 class StorageEngine:
     def __init__(self, db_path: str, *, embedding_dim: int | None = None) -> None:
@@ -763,7 +766,15 @@ class StorageEngine:
         what trust score, supersession timing, pin eligibility) lives in the governance /
         capture / core-tier layers (sf4/sf6/sf7), not here. Column names come from a fixed
         internal map (never caller input), so the dynamic SET clause is injection-safe.
+
+        ``status`` is validated at write time against the frozen enum (sf3/sf5 carry-over):
+        a bad status can never reach the column, so read paths may trust it. The DB CHECK
+        constraint is the ultimate backstop; this gives a clear error before the UPDATE.
         """
+        if status is not None and status not in _VALID_STATUS:
+            raise ValueError(
+                f'invalid status {status!r}; must be one of {sorted(_VALID_STATUS)}'
+            )
         candidates = {
             'kind': kind,
             'source': source,
