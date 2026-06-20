@@ -22,6 +22,23 @@ RELATIONSHIP_SYSTEM_PROMPT = (
 )
 RELATIONSHIP_USER_PROMPT = 'Entities: {entities}\n\nText: "{content}"\n\nExtract relationships:'
 
+# Default GLiNER entity labels. The first five are general-purpose; the rest
+# close the F13-flagged pipeline-domain coverage gaps (models, datasets,
+# endpoints, pipeline stages, services like RunPod/R2/Supabase) so the graph
+# captures this project's vocabulary, not just generic NER categories.
+DEFAULT_ENTITY_TYPES = [
+    'person',
+    'organization',
+    'location',
+    'project',
+    'technology',
+    'model',
+    'dataset',
+    'endpoint',
+    'pipeline_stage',
+    'service',
+]
+
 
 class BackgroundWorker:
     def __init__(
@@ -48,13 +65,7 @@ class BackgroundWorker:
         self._extractor = extractor
         self._llm = llm
         self._training_logger = training_logger
-        self._entity_types = entity_types or [
-            'person',
-            'organization',
-            'location',
-            'project',
-            'technology',
-        ]
+        self._entity_types = entity_types or list(DEFAULT_ENTITY_TYPES)
         self._poll_interval = poll_interval
         self._concurrency = max(1, concurrency)
         self._stop_event = threading.Event()
