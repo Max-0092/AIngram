@@ -15,9 +15,11 @@ from tests.conftest import MockEmbedder
 class _AlwaysContradicts:
     # Real classifier shape (verified vs types.py): classify(text_a, text_b) returns a
     # ContradictionVerdict. confidence has NO default, so it must be supplied.
-    # superseded_index=0 → ordered[0] (the first-linked entry) is superseded.
+    # superseded_index=None ⇒ _resolve_verdict's recency fallback supersedes the OLDER
+    # entry (earlier created_at) deterministically — get_entity_entry_pairs has no
+    # ORDER BY, so superseded_index=0 ("first in the pair") would be non-deterministic.
     def classify(self, text_a, text_b):
-        return ContradictionVerdict(contradicts=True, confidence=1.0, superseded_index=0)
+        return ContradictionVerdict(contradicts=True, confidence=1.0)
 
 
 def test_resolved_contradiction_sets_valid_to(tmp_path):
