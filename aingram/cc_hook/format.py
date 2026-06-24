@@ -37,6 +37,13 @@ def format_memory_block(entries: list[dict[str, Any]]) -> str:
         attrs = [
             f'id="{_attr_escape(str(e.get("entry_id", "")))}"',
             f'score="{_attr_escape(f"{score:.2f}")}"',
+        ]
+        # Absolute cosine relevance (0–1) — display-only; lets the reader tell a strong
+        # match (~0.7) from a tangential one (~0.45), which the RRF score cannot convey.
+        relevance = e.get('relevance')
+        if relevance is not None:
+            attrs.append(f'relevance="{_attr_escape(f"{float(relevance):.2f}")}"')
+        attrs += [
             f'type="{_attr_escape(str(e.get("entry_type", "")))}"',
             f'created="{_attr_escape(_short_date(e.get("created_at")))}"',
         ]

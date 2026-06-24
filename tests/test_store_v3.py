@@ -560,3 +560,23 @@ class TestConsolidate:
             # Verify LLM was passed to MemoryMerger
             _, kwargs = mock_merger_init.call_args
             assert kwargs['llm'] is llm
+
+
+class TestRelevanceFor:
+    """Display-only cosine relevance companion to recall (additive, no ranking impact)."""
+
+    def test_empty_ids_returns_empty(self, store):
+        assert store.relevance_for('anything', []) == {}
+
+    def test_exact_text_scores_near_one(self, store):
+        # MockEmbedder is deterministic by text, so an identical query → cosine ≈ 1.0
+        eid = store.remember('database connection pool exhausted')
+        rel = store.relevance_for('database connection pool exhausted', [eid])
+        assert eid in rel
+        assert rel[eid] > 0.99
+
+    def test_keys_limited_to_requested_ids(self, store):
+        a = store.remember('alpha topic one')
+        store.remember('beta topic two')
+        rel = store.relevance_for('alpha topic one', [a])
+        assert set(rel.keys()) == {a}

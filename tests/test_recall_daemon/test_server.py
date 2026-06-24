@@ -51,6 +51,9 @@ class _StubStore:
 
         return [_Wrapped(r) for r in self._results]
 
+    def relevance_for(self, query: str, entry_ids: list[str]) -> dict[str, float]:
+        return {eid: 0.5 for eid in entry_ids}
+
     def close(self) -> None:
         pass
 

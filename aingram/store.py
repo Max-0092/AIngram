@@ -412,6 +412,26 @@ class MemoryStore:
         results.sort(key=lambda r: r.score, reverse=True)
         return results[:limit]
 
+    def relevance_for(self, query: str, entry_ids: list[str]) -> dict[str, float]:
+        """Absolute cosine relevance (0–1) of each entry to ``query``.
+
+        Display-only companion to ``recall``: recall's ``score`` is an RRF-fusion
+        composite (rank-based, tiny, good for *ordering* but not a relevance reading).
+        This returns the raw cosine similarity per entry so a consumer can tell a
+        strong match (~0.7) from a tangential one (~0.45) — information RRF discards.
+        Pure read, no ranking/threshold impact. Reuses the engine's existing cosine
+        (search_vectors_filtered returns distance; relevance = 1 - distance).
+        """
+        if not entry_ids:
+            return {}
+        embedding = self._embedder.embed(query)
+        return {
+            eid: 1.0 - dist
+            for eid, dist in self._engine.search_vectors_filtered(
+                embedding, entry_ids, limit=len(entry_ids)
+            )
+        }
+
     def get_context(self, query: str, *, max_tokens: int = 2000) -> str:
         """Assemble prompt context: the always-in-context pinned core tier first,
         then query-driven recall (archival), with every fragment passed through

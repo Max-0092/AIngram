@@ -81,3 +81,18 @@ def test_created_at_shortened_to_date() -> None:
 def test_attribute_quotes_escaped_in_attribute() -> None:
     out = format_memory_block([_entry(entry_type='weird"type')])
     assert '&quot;' in out
+
+
+def test_relevance_attribute_rendered_when_present() -> None:
+    entry = _entry()
+    entry['relevance'] = 0.7361
+    out = format_memory_block([entry])
+    # display-only cosine relevance, 2dp; distinct from the RRF score attribute
+    assert 'relevance="0.74"' in out
+    assert 'score="0.42"' in out
+
+
+def test_relevance_attribute_omitted_when_absent() -> None:
+    # _entry() carries no 'relevance' key — attribute must not appear (backward-compat)
+    out = format_memory_block([_entry()])
+    assert 'relevance=' not in out

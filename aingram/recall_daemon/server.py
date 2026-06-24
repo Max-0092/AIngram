@@ -35,6 +35,7 @@ class _ReuseThreadingHTTPServer(ThreadingHTTPServer):
 
 class _StoreProto(Protocol):
     def recall(self, query: str, *, limit: int = 20, verify: bool = True) -> list: ...
+    def relevance_for(self, query: str, entry_ids: list[str]) -> dict[str, float]: ...
     def close(self) -> None: ...
 
 
@@ -229,10 +230,17 @@ class RecallDaemon:
             self._write_json(handler, 500, {'error': f'recall failed: {e}'})
             return
 
+        # Absolute cosine relevance (0–1) per result — display-only signal so the
+        # consumer can judge match strength (RRF score is rank-based, not a relevance
+        # reading). Does not affect ranking or the threshold filter below.
+        relevance = self._store.relevance_for(
+            query, [r.entry.entry_id for r in raw_results]
+        )
         raw_dicts = [
             {
                 'entry_id': r.entry.entry_id,
                 'score': r.score,
+                'relevance': relevance.get(r.entry.entry_id),
                 'content': r.entry.content,
                 'entry_type': str(r.entry.entry_type),
                 'created_at': r.entry.created_at,
