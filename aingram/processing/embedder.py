@@ -140,6 +140,18 @@ class NomicEmbedder:
 
             get_providers = getattr(ort, 'get_available_providers', None)
             session_kw: dict = {}
+
+            # Bound long-running daemon RAM: the ORT CPU BFCArena reserves memory for the
+            # largest input shape it has seen and never returns it to the OS. With unbounded
+            # query token lengths (recall embeds every query, no fixed truncation), that grows
+            # for the process lifetime (~1GB/hr observed). Disabling the arena frees each run's
+            # buffers immediately — correctness-neutral, tiny per-call malloc cost.
+            try:
+                _so = ort.SessionOptions()
+                _so.enable_cpu_mem_arena = False
+                session_kw['sess_options'] = _so
+            except Exception:
+                pass
             cuda_listed = False
             if callable(get_providers):
                 try:
