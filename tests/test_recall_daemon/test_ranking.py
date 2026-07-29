@@ -145,3 +145,48 @@ def test_limit_respected_after_filter() -> None:
         limit=3,
     )
     assert len(out) == 3
+
+
+def _r(entry_id: str, score: float, relevance: float | None) -> dict:
+    d = {'entry_id': entry_id, 'score': score, 'content': entry_id}
+    if relevance is not None:
+        d['relevance'] = relevance
+    return d
+
+
+def _rank(results, **kw):
+    base = dict(
+        cwd=None, seen=[], project_boost=0.0, seen_demote=0.0,
+        score_threshold=0.0, limit=10,
+    )
+    base.update(kw)
+    return apply_ranking(results, **base)
+
+
+def test_relevance_threshold_drops_weak_matches() -> None:
+    out = _rank(
+        [_r('hit', 0.004, 0.63), _r('tangential', 0.004, 0.43)],
+        relevance_threshold=0.45,
+    )
+    assert [r['entry_id'] for r in out] == ['hit']
+
+
+def test_relevance_threshold_defaults_to_off() -> None:
+    """Existing deployments must keep their behaviour when the knob is unset."""
+    out = _rank([_r('a', 0.004, 0.10), _r('b', 0.004, 0.05)])
+    assert len(out) == 2
+
+
+def test_missing_relevance_is_never_dropped() -> None:
+    """A store that cannot compute cosine must not silently return nothing."""
+    out = _rank([_r('no_rel', 0.004, None)], relevance_threshold=0.9)
+    assert [r['entry_id'] for r in out] == ['no_rel']
+
+
+def test_relevance_and_score_thresholds_are_independent() -> None:
+    out = _rank(
+        [_r('low_score_high_rel', 0.001, 0.9), _r('high_score_low_rel', 0.05, 0.1)],
+        score_threshold=0.01,
+        relevance_threshold=0.5,
+    )
+    assert out == []

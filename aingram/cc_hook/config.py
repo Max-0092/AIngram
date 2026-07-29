@@ -23,15 +23,24 @@ class HookConfig:
     idle_shutdown_seconds: float = 30 * 60
 
     prompt_limit: int = 8
-    # Score thresholds are calibrated for the composite score returned by
+    # Score thresholds apply to the composite score returned by
     # MemoryStore.recall(): rrf_score * importance * confidence * recency.
-    # With RRF k=60 across ≤4 ranked lists the composite ceiling is ≈0.066
-    # (4/61), and typical strong matches land in 0.008–0.015. Thresholds /
-    # boost / demote are scaled to that range. Override via hook.toml if you
-    # want stricter filtering.
+    #
+    # CAUTION: this is an RRF-derived number, so it scores *rank position*, not
+    # similarity, and its real range is corpus-dependent — the theoretical ceiling
+    # is ≈0.066 (4/61) but a live 3k-entry corpus was measured topping out at
+    # 0.0047, i.e. below the 0.005 default, which silently returned zero results on
+    # every prompt for six weeks. Treat these as a tail floor, not a relevance
+    # gate, and verify against your own corpus before raising them.
+    #
+    # For an actual relevance gate use the *_relevance_threshold knobs below:
+    # absolute cosine in 0..1, which tracks match quality (direct hit ~0.6+,
+    # tangential ~0.43). Default 0.0 = off, preserving prior behaviour.
     prompt_score_threshold: float = 0.005
+    prompt_relevance_threshold: float = 0.0
     edit_limit: int = 3
     edit_score_threshold: float = 0.007
+    edit_relevance_threshold: float = 0.0
     tool_matchers: list[str] = field(default_factory=lambda: ['Edit', 'Write', 'NotebookEdit'])
 
     project_boost: float = 0.003
@@ -73,11 +82,15 @@ def _apply_toml(cfg: HookConfig, data: dict[str, Any]) -> HookConfig:
         cfg.prompt_limit = int(ups['limit'])
     if 'score_threshold' in ups:
         cfg.prompt_score_threshold = float(ups['score_threshold'])
+    if 'relevance_threshold' in ups:
+        cfg.prompt_relevance_threshold = float(ups['relevance_threshold'])
     ptu = triggers.get('pre_tool_use', {})
     if 'limit' in ptu:
         cfg.edit_limit = int(ptu['limit'])
     if 'score_threshold' in ptu:
         cfg.edit_score_threshold = float(ptu['score_threshold'])
+    if 'relevance_threshold' in ptu:
+        cfg.edit_relevance_threshold = float(ptu['relevance_threshold'])
     if 'tool_matchers' in ptu and isinstance(ptu['tool_matchers'], list):
         cfg.tool_matchers = [str(m) for m in ptu['tool_matchers']]
 

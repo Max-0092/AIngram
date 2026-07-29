@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
+import re
 import sys
 import threading
 import time
@@ -15,6 +17,25 @@ from aingram.security.bounds import sanitize_for_prompt
 logger = logging.getLogger(__name__)
 
 _MAX_SEEN_IDS = 500
+
+_PROJECT_LABEL_UNSAFE = re.compile(r'[^A-Za-z0-9._-]')
+
+
+def _project_label(project_path: str) -> str:
+    """Reduce ``project_path`` to a safe, renderable project identifier.
+
+    ``sanitize_for_prompt`` is the wrong egress tool for this field. It wraps its
+    input in ``<user-content>`` spotlight tags — right for prose, but it corrupts a
+    path, because the sole consumer (``cc_hook.format``) renders only the *basename*
+    and ``basename('<user-content>\\n/a/b\\n</user-content>')`` is ``'user-content>'``.
+    Every entry rendered ``project="user-content>"`` instead of the project name.
+
+    A path is a structured identifier, not prose, so it gets an allowlist instead:
+    basename, keep only ``[A-Za-z0-9._-]``, cap the length. Strictly stronger than
+    tag-wrapping for this shape — no tag, quote, newline or separator survives it.
+    """
+    normalized = str(project_path).replace('\\', '/').rstrip('/')
+    return _PROJECT_LABEL_UNSAFE.sub('', posixpath.basename(normalized))[:64]
 
 
 _CLIENT_DISCONNECT_ERRORS = (ConnectionAbortedError, BrokenPipeError, ConnectionResetError)
@@ -209,6 +230,7 @@ class RecallDaemon:
         try:
             limit = int(body.get('limit', 8))
             score_threshold = float(body.get('score_threshold', 0.0))
+            relevance_threshold = float(body.get('relevance_threshold', 0.0))
             project_boost = float(body.get('project_boost', 0.0))
             seen_demote = float(body.get('seen_demote', 0.0))
         except (TypeError, ValueError) as e:
@@ -262,12 +284,15 @@ class RecallDaemon:
             seen_demote=seen_demote,
             score_threshold=score_threshold,
             limit=limit,
+            relevance_threshold=relevance_threshold,
         )
         for _d in ranked:
             # Sanitize every agent-influenceable field at egress. Ranking has already
             # consumed project_path (apply_ranking above), so mutating it here is safe.
+            # Prose is spotlighted; project_path is an identifier and gets an
+            # allowlist instead (see _project_label — spotlighting it corrupts it).
             _d['content'] = sanitize_for_prompt(_d['content'])
             if _d.get('project_path'):
-                _d['project_path'] = sanitize_for_prompt(_d['project_path'])
+                _d['project_path'] = _project_label(_d['project_path'])
         daemon_ms = round((time.time() - t0) * 1000, 1)
         self._write_json(handler, 200, {'results': ranked, 'daemon_ms': daemon_ms})

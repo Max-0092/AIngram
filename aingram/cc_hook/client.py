@@ -26,12 +26,14 @@ class DaemonClient:
         seen_entry_ids: list[str],
         project_boost: float,
         seen_demote: float,
+        relevance_threshold: float = 0.0,
     ) -> list[dict[str, Any]]:
         body = json.dumps(
             {
                 'query': query,
                 'limit': limit,
                 'score_threshold': score_threshold,
+                'relevance_threshold': relevance_threshold,
                 'cwd': cwd,
                 'seen_entry_ids': seen_entry_ids,
                 'project_boost': project_boost,

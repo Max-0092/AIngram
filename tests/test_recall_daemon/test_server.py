@@ -205,3 +205,41 @@ def test_recall_rejects_malformed_numeric_params(daemon: RecallDaemon) -> None:
     )
     assert status == 400
     assert 'invalid numeric' in body.get('error', '').lower()
+
+
+def test_project_path_survives_egress_as_a_label(daemon: RecallDaemon) -> None:
+    """project_path must reach the client as a renderable basename.
+
+    Regression: it used to pass through sanitize_for_prompt, which wraps its input
+    in <user-content> spotlight tags. The client renders only the basename, and
+    basename('<user-content>\n/p/ProjA\n</user-content>') is 'user-content>', so
+    every entry displayed project="user-content>" instead of the project name.
+    """
+    status, body = _post(
+        f'{daemon.base_url}/recall',
+        {
+            'query': 'alpha',
+            'limit': 5,
+            'score_threshold': 0.0,
+            'cwd': None,
+            'seen_entry_ids': [],
+            'project_boost': 0.0,
+            'seen_demote': 0.0,
+        },
+    )
+    assert status == 200
+    labels = [r.get('project_path') for r in body['results'] if r.get('project_path')]
+    assert labels, 'expected at least one result carrying project_path'
+    assert all('user-content' not in label for label in labels)
+    assert 'ProjA' in labels
+
+
+def test_project_label_strips_injection_characters() -> None:
+    from aingram.recall_daemon.server import _project_label
+
+    assert _project_label('/p/ProjA') == 'ProjA'
+    assert _project_label('D:\\Misc\\GitHub\\portfolio\\AIngram') == 'AIngram'
+    assert _project_label('/p/ProjA/') == 'ProjA'
+    # No tag, quote, newline or separator may survive.
+    assert _project_label('/p/<script>"x\ny') == 'scriptxy'
+    assert len(_project_label('/p/' + 'a' * 200)) == 64

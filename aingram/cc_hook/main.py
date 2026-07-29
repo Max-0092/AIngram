@@ -44,12 +44,13 @@ def _default_spawn_daemon() -> None:
         _log('spawn_failed', err=str(e))
 
 
-def _budget_for_event(event: str, cfg: HookConfig) -> tuple[int, float]:
+def _budget_for_event(event: str, cfg: HookConfig) -> tuple[int, float, float]:
+    """Return ``(limit, score_threshold, relevance_threshold)`` for the event."""
     if event == 'UserPromptSubmit':
-        return cfg.prompt_limit, cfg.prompt_score_threshold
+        return cfg.prompt_limit, cfg.prompt_score_threshold, cfg.prompt_relevance_threshold
     if event == 'PreToolUse':
-        return cfg.edit_limit, cfg.edit_score_threshold
-    return 0, 1.0  # unreachable if we already derived a query
+        return cfg.edit_limit, cfg.edit_score_threshold, cfg.edit_relevance_threshold
+    return 0, 1.0, 0.0  # unreachable if we already derived a query
 
 
 def run(
@@ -82,7 +83,7 @@ def run(
     seen_store.cleanup_stale(stale_days=cfg.stale_days)
     seen = seen_store.read(session_id)
 
-    limit, threshold = _budget_for_event(str(event), cfg)
+    limit, threshold, relevance_threshold = _budget_for_event(str(event), cfg)
     if limit <= 0:
         return 0
 
@@ -94,6 +95,7 @@ def run(
             query=query,
             limit=limit,
             score_threshold=threshold,
+            relevance_threshold=relevance_threshold,
             cwd=cwd,
             seen_entry_ids=seen,
             project_boost=cfg.project_boost,
