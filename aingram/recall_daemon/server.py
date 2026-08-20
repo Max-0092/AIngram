@@ -295,4 +295,7 @@ class RecallDaemon:
             if _d.get('project_path'):
                 _d['project_path'] = _project_label(_d['project_path'])
         daemon_ms = round((time.time() - t0) * 1000, 1)
+        # The hook logs its end-to-end ms; this is the serve-side half. A large
+        # client-minus-daemon gap means queueing/transport, not slow recall.
+        logger.info('recall served: %sms n=%d', daemon_ms, len(ranked))
         self._write_json(handler, 200, {'results': ranked, 'daemon_ms': daemon_ms})

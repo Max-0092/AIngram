@@ -13,6 +13,19 @@ _RESEARCH_TOOLS = frozenset({'WebSearch', 'WebFetch', 'Agent'})
 _RESULT_PREVIEW_LEN = 800
 
 
+def _cap_at_word(text: str, cap: int) -> str:
+    """Cap length without splitting a word — this text is STORED as the memory
+    entry, so a bare slice bakes mid-word truncation into the corpus and every
+    later recall serves it back looking corrupted. (Same helper as
+    recall_daemon.ranking; duplicated on purpose, the packages don't import
+    each other.)"""
+    if len(text) <= cap:
+        return text
+    cut = text[: cap - 1]  # budget the ellipsis inside the cap
+    head, sep, _ = cut.rpartition(' ')
+    return (head if sep else cut).rstrip() + '…'
+
+
 def _format_research_record(tool_name: str, tool_input: dict, tool_response: dict) -> tuple[str, str]:
     """Return (user_prompt, assistant_response) for a research tool call."""
     if tool_name == 'WebSearch':
@@ -26,9 +39,9 @@ def _format_research_record(tool_name: str, tool_input: dict, tool_response: dic
                 for r in results[:5]
                 if isinstance(r, dict)
             ]
-            response = '\n'.join(lines)[:_RESULT_PREVIEW_LEN]
+            response = _cap_at_word('\n'.join(lines), _RESULT_PREVIEW_LEN)
         else:
-            response = json.dumps(tool_response, default=str)[:_RESULT_PREVIEW_LEN]
+            response = _cap_at_word(json.dumps(tool_response, default=str), _RESULT_PREVIEW_LEN)
         return prompt, response
 
     if tool_name == 'WebFetch':
@@ -37,7 +50,7 @@ def _format_research_record(tool_name: str, tool_input: dict, tool_response: dic
         prompt = f'Fetched: {url}' + (f' — {intent}' if intent else '')
         # Raw content is noise; the intent + URL is the signal
         content = tool_response.get('content', '') if tool_response else ''
-        response = (str(content)[:_RESULT_PREVIEW_LEN] if content else '')
+        response = (_cap_at_word(str(content), _RESULT_PREVIEW_LEN) if content else '')
         return prompt, response
 
     if tool_name == 'Agent':
@@ -45,7 +58,7 @@ def _format_research_record(tool_name: str, tool_input: dict, tool_response: dic
         subagent_type = tool_input.get('subagent_type', '')
         prompt = f'Delegated ({subagent_type}): {description}' if subagent_type else f'Delegated: {description}'
         result = tool_response.get('result', '') if tool_response else ''
-        response = str(result)[:_RESULT_PREVIEW_LEN] if result else ''
+        response = _cap_at_word(str(result), _RESULT_PREVIEW_LEN) if result else ''
         return prompt, response
 
     return '', ''
@@ -80,7 +93,7 @@ class ClaudeCodeAdapter(ToolAdapter):
                 CaptureRecord(
                     source_tool=self.tool_name,
                     session_id=session_id,
-                    user_prompt=message[:6000],
+                    user_prompt=_cap_at_word(message, 6000),
                     project_path=raw.get('cwd'),
                     timestamp=ts,
                 )

@@ -6,6 +6,17 @@ from typing import Any
 _CONTENT_CAP = 500
 
 
+def _cap_at_word(text: str, cap: int) -> str:
+    """Cap length without splitting a word — a half word in a memory preview
+    reads as corruption to both humans and models. The '…' marks that more
+    text exists in the stored entry."""
+    if len(text) <= cap:
+        return text
+    cut = text[: cap - 1]  # budget the ellipsis inside the cap
+    head, sep, _ = cut.rpartition(' ')
+    return (head if sep else cut).rstrip() + '…'
+
+
 def apply_ranking(
     results: list[dict[str, Any]],
     *,
@@ -55,7 +66,7 @@ def apply_ranking(
         out['score'] = score
         content = str(out.get('content', ''))
         if len(content) > _CONTENT_CAP:
-            out['content'] = content[:_CONTENT_CAP]
+            out['content'] = _cap_at_word(content, _CONTENT_CAP)
         adjusted.append(out)
     adjusted.sort(key=lambda r: r['score'], reverse=True)
     return adjusted[:limit]

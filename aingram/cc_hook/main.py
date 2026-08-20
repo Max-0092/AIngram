@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
@@ -19,10 +20,16 @@ _LOG_PATH = Path('~/.aingram/hook.log').expanduser()
 
 
 def _log(reason: str, **ctx) -> None:
+    """One tab-separated line per event, timestamped.
+
+    Successes log too (``recall_ok``) — the log existed for years as
+    failures-only, which made the failure *rate* unknowable: 1000 logged
+    timeouts is catastrophic at 1100 requests and noise at 100k.
+    """
     try:
         _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with _LOG_PATH.open('a', encoding='utf-8') as f:
-            parts = [reason]
+            parts = [time.strftime('%Y-%m-%dT%H:%M:%S%z'), reason]
             for k, v in ctx.items():
                 parts.append(f'{k}={v!r}')
             f.write('\t'.join(parts) + '\n')
@@ -90,6 +97,7 @@ def run(
     client = DaemonClient(
         host=cfg.daemon_host, port=cfg.daemon_port, timeout_ms=cfg.hook_timeout_ms
     )
+    t0 = time.monotonic()
     try:
         results = client.recall(
             query=query,
@@ -111,11 +119,22 @@ def run(
             'daemon_refused' if refused else 'daemon_error',
             event=event,
             session=session_id,
+            ms=int((time.monotonic() - t0) * 1000),
             err=str(e),
         )
         if refused or timed_out:
             spawn_daemon()
         return 0
+
+    # An empty result is still a served request — log it, or the ok/error ratio
+    # undercounts exactly the quiet sessions where recall works fine.
+    _log(
+        'recall_ok',
+        event=event,
+        session=session_id,
+        n=len(results),
+        ms=int((time.monotonic() - t0) * 1000),
+    )
 
     if not results:
         return 0

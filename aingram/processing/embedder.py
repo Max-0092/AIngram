@@ -110,6 +110,11 @@ class NomicEmbedder:
         self._session = None
         self._tokenizer = None
         self._preferred_provider = preferred_provider
+        # Single-slot memo: every recall-daemon request embeds the SAME query
+        # twice back-to-back (store.recall then store.relevance_for), so one
+        # slot halves the ONNX cost on the hot path. Tuple swap is atomic in
+        # CPython; a race across daemon threads just costs a memo miss.
+        self._memo: tuple[str, list[float]] | None = None
 
     def _ensure_loaded(self) -> None:
         if self._session is not None:
@@ -230,6 +235,9 @@ class NomicEmbedder:
         return {k: v for k, v in candidates.items() if k in wanted}
 
     def embed(self, text: str) -> list[float]:
+        memo = self._memo
+        if memo is not None and memo[0] == text:
+            return list(memo[1])
         self._ensure_loaded()
         try:
             encoded = self._tokenizer.encode(text)
@@ -249,7 +257,9 @@ class NomicEmbedder:
             if norm > 0:
                 pooled = pooled / norm
 
-            return pooled.tolist()
+            result = pooled.tolist()
+            self._memo = (text, result)
+            return list(result)
         except Exception as e:
             raise EmbeddingError(f'Embedding failed: {e}') from e
 
